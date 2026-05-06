@@ -1,63 +1,30 @@
-import random
+from __future__ import annotations
+
 import re
 from pathlib import Path
 
 import gradio as gr
 
+from config import AppConfig
+from errors import ConfigError, ServiceError
+from llm_client import LLMClient
+from mcp_client import MCPClient
+from planner_agent import PlannerAgent, SENSITIVE_TERMS
+from rag_store import RAGStore
+from vision_client import VisionClient
+
 DESCRIPTION = """
-SZ-HK Hub 基于多智能体协作、先进 RAG 以及 MCP 协议，为深港双城生活提供可验证、可追踪、可落地的决策支持。
-数据为模拟演示，可替换为真实 MCP API。
+SZ-HK Hub 基于 LangGraph + 高级 RAG + MCP 工具链，为深港双城生活提供可验证、可追踪、可落地的决策支持。
+需要配置 LLM API 与 MCP 服务接口以启用全量能力。
 """.strip()
 
-SENSITIVE_TERMS = ["绕过外汇", "套现", "非法", "洗钱", "违规开户", "避税"]
 
-RAG_DOCS = [
-    {
-        "title": "ZA Bank 数字银行开户指南",
-        "tags": ["开户", "ZA Bank", "材料"],
-        "summary": "需准备身份证、港澳通行证及住址证明。支持线上预约视频验证。",
-    },
-    {
-        "title": "港铁西九龙通关时段",
-        "tags": ["港铁", "西九龙", "通关"],
-        "summary": "高峰时段 08:00-10:00，建议提前 30 分钟到达。",
-    },
-    {
-        "title": "深圳湾口岸人流提示",
-        "tags": ["口岸", "深圳湾", "通关"],
-        "summary": "周末人流高，建议避开 11:00-13:00。",
-    },
-    {
-        "title": "跨境支付合规提示",
-        "tags": ["合规", "支付", "外汇"],
-        "summary": "严格遵守外汇管理规定，避免拆分交易。",
-    },
-]
-
-BASE_METRICS = {
-    "rate": 0.92,
-    "queue": 28,
-    "mtr": 6,
-}
-
-PLANNER_TEMPLATES = [
-    {
-        "keywords": ["开户", "银行", "ZA", "数字银行"],
-        "tasks": [
-            "确认开户材料清单并预约视频验证",
-            "规划通关时间并选择人流较低口岸",
-            "准备跨境支付方案与合规提示",
-        ],
-    },
-    {
-        "keywords": ["比赛", "活动", "打卡", "展览"],
-        "tasks": [
-            "解析活动时间与地点",
-            "同步港铁时刻并预留通关时间",
-            "生成可共享的日程清单",
-        ],
-    },
-]
+config = AppConfig.from_env()
+llm_client = LLMClient(config)
+rag_store = RAGStore(config)
+mcp_client = MCPClient(config)
+planner_agent = PlannerAgent(rag_store, mcp_client, llm_client)
+vision_client = VisionClient(config)
 
 
 def format_list(items: list[str], empty_message: str) -> str:
@@ -68,27 +35,6 @@ def format_list(items: list[str], empty_message: str) -> str:
 
 def has_sensitive(text: str) -> bool:
     return any(term in text for term in SENSITIVE_TERMS)
-
-
-def generate_plan(text: str) -> list[str]:
-    matched = []
-    for template in PLANNER_TEMPLATES:
-        if any(keyword in text for keyword in template["keywords"]):
-            matched.extend(template["tasks"])
-    if matched:
-        return matched
-    return [
-        "梳理跨境需求并拆解成可执行子任务",
-        "检索最新政策与开户信息",
-        "综合实时数据给出路线与支付建议",
-    ]
-
-
-def handle_planner(text: str) -> tuple[str, str]:
-    text = text.strip()
-    tasks = generate_plan(text)
-    status = "需要人工复核" if has_sensitive(text) else "已通过"
-    return format_list(tasks, "暂无规划结果。"), status
 
 
 def parse_events(text: str) -> list[dict[str, str]]:
@@ -125,59 +71,103 @@ def detect_conflicts(events: list[dict[str, str]]) -> list[str]:
     return conflicts
 
 
-def handle_events(text: str) -> tuple[str, str]:
-    events = parse_events(text)
+def handle_planner(text: str) -> tuple[str, str]:
+    text = text.strip()
+    if not text:
+        return "请输入跨境需求描述。", "未提交"
+    try:
+        result = planner_agent.run(text)
+    except ConfigError as exc:
+        return format_list([f"配置缺失：{exc}"], "暂无规划结果。"), "需要配置"
+    except ServiceError as exc:
+        return format_list([f"服务异常：{exc}"], "暂无规划结果。"), "需要人工复核"
+    return format_list(result.plan, "暂无规划结果。"), result.verification
+
+
+def handle_events(text: str, file_path: str | None) -> tuple[str, str]:
+    text = text.strip()
+    events = []
+    error_note = ""
+    if file_path:
+        try:
+            events = vision_client.parse_events(file_path)
+        except (ConfigError, ServiceError) as exc:
+            error_note = f"视觉解析失败：{exc}"
+    if not events and text:
+        events = parse_events(text)
+    if not events:
+        return "暂无活动解析结果。", error_note or "未检测到明显冲突。"
     event_lines = [f"{event['date']} {event['time']} · {event['title']}" for event in events]
     conflicts = detect_conflicts(events)
     conflict_message = (
         f"检测到 {len(conflicts)} 条时间冲突，请调整日程。" if conflicts else "未检测到明显冲突。"
     )
+    if error_note:
+        conflict_message = f"{error_note} / {conflict_message}"
     return format_list(event_lines, "暂无活动解析结果。"), conflict_message
 
 
 def describe_event_file(file_path: str | None) -> str:
     if not file_path:
         return "未选择活动截图。"
-    return f"已选择文件：{Path(file_path).name}（演示版暂不解析图片内容）"
+    return f"已选择文件：{Path(file_path).name}"
 
 
-def compute_metrics() -> tuple[float, int, int]:
-    rate = round(BASE_METRICS["rate"] + (random.random() - 0.5) * 0.02, 2)
-    queue = max(10, round(BASE_METRICS["queue"] + (random.random() - 0.5) * 10))
-    mtr = max(3, round(BASE_METRICS["mtr"] + (random.random() - 0.5) * 2))
-    return rate, queue, mtr
+def _fetch_metrics() -> tuple[str, str, str, int | None]:
+    rate_text = "汇率数据未配置"
+    queue_text = "深圳湾 数据未配置"
+    mtr_text = "西九龙 数据未配置"
+    queue_value = None
+    try:
+        rate = mcp_client.get_exchange_rate()
+        rate_text = f"1 {rate.base} = {rate.rate:.2f} {rate.target}"
+    except (ConfigError, ServiceError):
+        rate_text = "汇率数据不可用"
+    try:
+        port = mcp_client.get_port_traffic("深圳湾")
+        queue_value = port.queue_minutes
+        queue_text = f"{port.port} {port.queue_minutes} 分钟"
+    except (ConfigError, ServiceError):
+        queue_text = "深圳湾 数据不可用"
+    try:
+        mtr = mcp_client.get_mtr_schedule("西九龙")
+        mtr_text = f"{mtr.station} {mtr.interval_minutes} 分钟一班"
+    except (ConfigError, ServiceError):
+        mtr_text = "西九龙 数据不可用"
+    return rate_text, queue_text, mtr_text, queue_value
 
 
 def refresh_overview() -> tuple[str, str, str]:
-    rate, queue, mtr = compute_metrics()
-    return (
-        f"1 HKD = {rate} CNY",
-        f"深圳湾 {queue} 分钟",
-        f"西九龙 {mtr} 分钟一班",
-    )
+    rate_text, queue_text, mtr_text, _ = _fetch_metrics()
+    return rate_text, queue_text, mtr_text
 
 
 def refresh_decision() -> tuple[str, str, str, str]:
-    rate, queue, mtr = compute_metrics()
-    route = "推荐路线：深圳湾口岸 → 西九龙高铁站" if queue < 25 else "推荐路线：福田口岸 → 港铁东铁线"
-    return (
-        f"1 HKD = {rate} CNY",
-        f"预计 {queue} 分钟",
-        f"{mtr} 分钟一班",
-        route,
-    )
+    rate_text, queue_text, mtr_text, queue_value = _fetch_metrics()
+    if queue_value is None:
+        route = "推荐路线：请先配置口岸实时数据"
+    elif queue_value < 25:
+        route = "推荐路线：深圳湾口岸 → 西九龙高铁站"
+    else:
+        route = "推荐路线：福田口岸 → 港铁东铁线"
+    return rate_text, queue_text, mtr_text, route
 
 
 def search_rag(query: str) -> str:
     trimmed = query.strip()
     if not trimmed:
         return "请输入关键词以检索政策或开户信息。"
-    results = [
-        f"{doc['title']}：{doc['summary']}"
-        for doc in RAG_DOCS
-        if any(trimmed in tag or tag in trimmed for tag in doc["tags"])
-    ]
-    return format_list(results, "暂无匹配文档，请尝试其它关键词。")
+    results = rag_store.search(trimmed)
+    if not results:
+        if not rag_store.has_documents():
+            return "知识库为空，请先在 rag_corpus/ 补充资料并运行 rag_ingest.py。"
+        return "暂无匹配文档，请尝试其它关键词。"
+    lines = []
+    for result in results:
+        title = result.metadata.get("title") or Path(result.metadata.get("source", "")).name or "参考资料"
+        snippet = result.document.replace("\n", " ").strip()
+        lines.append(f"{title}：{snippet[:120]}...")
+    return format_list(lines, "暂无匹配文档，请尝试其它关键词。")
 
 
 def update_safety(text: str) -> str:
@@ -209,7 +199,7 @@ with gr.Blocks(title="SZ-HK Hub · 深港跨境专业生活助手") as demo:
     gr.Markdown("## 体验工作台")
     with gr.Row():
         with gr.Column():
-            gr.Markdown("### Planner + Verifier")
+            gr.Markdown("### Planner + Verifier (LangGraph)")
             planner_input = gr.Textbox(
                 label="跨境需求描述",
                 placeholder="例如：下周六去西九龙打卡并参加比赛，顺便在 ZA Bank 开户。",
@@ -225,7 +215,7 @@ with gr.Blocks(title="SZ-HK Hub · 深港跨境专业生活助手") as demo:
             )
 
         with gr.Column():
-            gr.Markdown("### 活动/情报解析")
+            gr.Markdown("### 活动/情报解析 (Vision)")
             event_file = gr.File(label="上传活动截图", file_count="single", type="filepath")
             event_file_note = gr.Textbox(value="未选择活动截图。", interactive=False)
             event_file.change(
@@ -243,13 +233,13 @@ with gr.Blocks(title="SZ-HK Hub · 深港跨境专业生活助手") as demo:
             event_conflict = gr.Textbox(value="未检测到明显冲突。", interactive=False)
             event_button.click(
                 fn=handle_events,
-                inputs=event_input,
+                inputs=[event_input, event_file],
                 outputs=[event_output, event_conflict],
             )
 
     with gr.Row():
         with gr.Column():
-            gr.Markdown("### 实时决策支持")
+            gr.Markdown("### 实时决策支持 (MCP)")
             decision_rate = gr.Textbox(label="汇率", value=initial_decision[0], interactive=False)
             decision_queue = gr.Textbox(label="深圳湾口岸", value=initial_decision[1], interactive=False)
             decision_mtr = gr.Textbox(label="西九龙港铁", value=initial_decision[2], interactive=False)
@@ -261,7 +251,7 @@ with gr.Blocks(title="SZ-HK Hub · 深港跨境专业生活助手") as demo:
             )
 
         with gr.Column():
-            gr.Markdown("### RAG 知识检索")
+            gr.Markdown("### RAG 知识检索 (Vector DB)")
             rag_query = gr.Textbox(label="政策/开户问题", placeholder="例如：ZA Bank 开户材料")
             rag_button = gr.Button("检索文档")
             rag_results = gr.Markdown("暂无检索结果。")
