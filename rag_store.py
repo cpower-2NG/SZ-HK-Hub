@@ -88,11 +88,13 @@ def ingest_corpus(config: AppConfig, *, reset: bool = True) -> int:
     documents: list[str] = []
     metadatas: list[dict] = []
     for file_path in files:
+        relative_path = file_path.relative_to(corpus_dir).as_posix()
+        safe_prefix = relative_path.replace("/", "_")
         content = file_path.read_text(encoding="utf-8").strip()
         if not content:
             continue
         for idx, chunk in enumerate(chunk_text(content)):
-            ids.append(f"{file_path.stem}-{idx}")
+            ids.append(f"{safe_prefix}-{idx}")
             documents.append(chunk)
             metadatas.append({"source": str(file_path), "chunk": idx, "title": file_path.stem})
     if documents:

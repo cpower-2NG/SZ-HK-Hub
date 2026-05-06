@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import base64
-import imghdr
 import json
 from typing import Any
 
@@ -106,10 +105,20 @@ class VisionClient:
     def _encode_image(self, file_data: bytes) -> tuple[str, str]:
         if not file_data:
             raise ServiceError("未找到上传的图片内容")
-        detected = imghdr.what(None, file_data)
-        media_type = f"image/{detected}" if detected else "image/png"
+        media_type = self._detect_media_type(file_data)
         encoded = base64.b64encode(file_data).decode("utf-8")
         return encoded, media_type
+
+    def _detect_media_type(self, file_data: bytes) -> str:
+        if file_data.startswith(b"\x89PNG\r\n\x1a\n"):
+            return "image/png"
+        if file_data.startswith(b"\xff\xd8\xff"):
+            return "image/jpeg"
+        if file_data[:6] in {b"GIF87a", b"GIF89a"}:
+            return "image/gif"
+        if file_data.startswith(b"RIFF") and file_data[8:12] == b"WEBP":
+            return "image/webp"
+        return "image/png"
 
     def _extract_events(self, content: str) -> list[dict[str, str]]:
         parsed = self._safe_json(content)

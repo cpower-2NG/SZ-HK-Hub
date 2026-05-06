@@ -57,6 +57,8 @@ def parse_events(text: str) -> list[dict[str, str]]:
                     day = int(match.group(2))
                 else:
                     parts = re.split(r"[/-]", candidate)
+                    if len(parts) < 2:
+                        continue
                     month = int(parts[-2])
                     day = int(parts[-1])
                 if 1 <= month <= 12 and 1 <= day <= 31:

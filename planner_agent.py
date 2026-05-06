@@ -11,6 +11,8 @@ from mcp_client import MCPClient
 from rag_store import RAGStore
 
 SENSITIVE_TERMS = ["绕过外汇", "套现", "非法", "洗钱", "违规开户", "避税"]
+TOOL_ORDER = ["exchange_rate", "port_traffic", "mtr_schedule"]
+TOOL_CHOICES = set(TOOL_ORDER)
 
 
 class AgentState(TypedDict, total=False):
@@ -61,7 +63,7 @@ class PlannerAgent:
                 "route": {
                     "intent": "general",
                     "needs_rag": True,
-                    "tool_calls": ["exchange_rate", "port_traffic", "mtr_schedule"],
+                    "tool_calls": TOOL_ORDER,
                     "needs_verification": True,
                 }
             }
@@ -73,11 +75,7 @@ class PlannerAgent:
             f"\n用户需求：{query}"
         )
         route = self.llm_client.chat_json(system_prompt, user_prompt)
-        route["tool_calls"] = [
-            tool
-            for tool in route.get("tool_calls", [])
-            if tool in {"exchange_rate", "port_traffic", "mtr_schedule"}
-        ]
+        route["tool_calls"] = [tool for tool in route.get("tool_calls", []) if tool in TOOL_CHOICES]
         return {"route": route}
 
     def _execute_actions(self, state: AgentState) -> AgentState:
