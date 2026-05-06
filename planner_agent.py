@@ -139,8 +139,7 @@ class PlannerAgent:
         query = state.get("user_query", "")
         if any(term in query for term in SENSITIVE_TERMS):
             return {"verification": "需要人工复核"}
-        route = state.get("route", {})
-        if route.get("needs_verification") and self.llm_client.is_configured:
+        if self.llm_client.is_configured:
             system_prompt = "你是合规审核助手，只回答 JSON。"
             user_prompt = (
                 "判断以下内容是否涉及金融/法律敏感操作，"

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import re
 from typing import Any
 
 import requests
@@ -88,10 +87,23 @@ class LLMClient:
         try:
             return json.loads(content)
         except json.JSONDecodeError:
-            match = re.search(r"\{.*?\}", content, re.S)
-            if not match:
-                raise ServiceError("LLM 未返回可解析的 JSON")
+            block = self._extract_json_block(content)
             try:
-                return json.loads(match.group(0))
+                return json.loads(block)
             except json.JSONDecodeError as exc:
                 raise ServiceError("LLM 返回的 JSON 解析失败") from exc
+
+    def _extract_json_block(self, content: str) -> str:
+        start = content.find("{")
+        if start == -1:
+            raise ServiceError("LLM 未返回可解析的 JSON")
+        depth = 0
+        for index in range(start, len(content)):
+            char = content[index]
+            if char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    return content[start : index + 1]
+        raise ServiceError("LLM 未返回完整的 JSON 对象")

@@ -1,11 +1,8 @@
 from __future__ import annotations
 
 import base64
+import imghdr
 import json
-import mimetypes
-import re
-import tempfile
-from pathlib import Path
 from typing import Any
 
 import requests
@@ -18,15 +15,15 @@ class VisionClient:
     def __init__(self, config: AppConfig) -> None:
         self.config = config
 
-    def parse_events(self, file_path: str) -> list[dict[str, str]]:
+    def parse_events(self, file_data: bytes) -> list[dict[str, str]]:
         if self.config.vision_provider == "anthropic":
-            return self._parse_with_anthropic(file_path)
-        return self._parse_with_openai(file_path)
+            return self._parse_with_anthropic(file_data)
+        return self._parse_with_openai(file_data)
 
-    def _parse_with_openai(self, file_path: str) -> list[dict[str, str]]:
+    def _parse_with_openai(self, file_data: bytes) -> list[dict[str, str]]:
         if not self.config.openai_api_key:
             raise ConfigError("未配置 OPENAI_API_KEY")
-        image_data, media_type = self._read_image(file_path)
+        image_data, media_type = self._encode_image(file_data)
         url = f"{self.config.openai_base_url.rstrip('/')}/chat/completions"
         headers = {"Authorization": f"Bearer {self.config.openai_api_key}"}
         prompt = (
@@ -62,10 +59,10 @@ class VisionClient:
         content = data["choices"][0]["message"]["content"]
         return self._extract_events(content)
 
-    def _parse_with_anthropic(self, file_path: str) -> list[dict[str, str]]:
+    def _parse_with_anthropic(self, file_data: bytes) -> list[dict[str, str]]:
         if not self.config.anthropic_api_key:
             raise ConfigError("未配置 ANTHROPIC_API_KEY")
-        image_data, media_type = self._read_image(file_path)
+        image_data, media_type = self._encode_image(file_data)
         url = f"{self.config.anthropic_base_url.rstrip('/')}/v1/messages"
         headers = {
             "x-api-key": self.config.anthropic_api_key,
@@ -106,18 +103,12 @@ class VisionClient:
         content = "".join(block.get("text", "") for block in data.get("content", []))
         return self._extract_events(content)
 
-    def _read_image(self, file_path: str) -> tuple[str, str]:
-        path = Path(file_path)
-        if not path.exists():
-            raise ServiceError("未找到上传的图片文件")
-        resolved = path.resolve()
-        allowed_roots = {Path.cwd().resolve(), Path(tempfile.gettempdir()).resolve()}
-        if not any(root == resolved or root in resolved.parents for root in allowed_roots):
-            raise ServiceError("不允许的文件路径")
-        if not resolved.is_file() or resolved.is_symlink():
-            raise ServiceError("上传文件不可读取")
-        media_type = mimetypes.guess_type(resolved.name)[0] or "image/png"
-        encoded = base64.b64encode(resolved.read_bytes()).decode("utf-8")
+    def _encode_image(self, file_data: bytes) -> tuple[str, str]:
+        if not file_data:
+            raise ServiceError("未找到上传的图片内容")
+        detected = imghdr.what(None, file_data)
+        media_type = f"image/{detected}" if detected else "image/png"
+        encoded = base64.b64encode(file_data).decode("utf-8")
         return encoded, media_type
 
     def _extract_events(self, content: str) -> list[dict[str, str]]:
@@ -138,10 +129,23 @@ class VisionClient:
         try:
             return json.loads(content)
         except json.JSONDecodeError:
-            match = re.search(r"\{.*?\}", content, re.S)
-            if not match:
-                raise ServiceError("视觉模型未返回可解析的 JSON")
+            block = self._extract_json_block(content)
             try:
-                return json.loads(match.group(0))
+                return json.loads(block)
             except json.JSONDecodeError as exc:
                 raise ServiceError("视觉模型 JSON 解析失败") from exc
+
+    def _extract_json_block(self, content: str) -> str:
+        start = content.find("{")
+        if start == -1:
+            raise ServiceError("视觉模型未返回可解析的 JSON")
+        depth = 0
+        for index in range(start, len(content)):
+            char = content[index]
+            if char == "{":
+                depth += 1
+            elif char == "}":
+                depth -= 1
+                if depth == 0:
+                    return content[start : index + 1]
+        raise ServiceError("视觉模型未返回完整的 JSON 对象")

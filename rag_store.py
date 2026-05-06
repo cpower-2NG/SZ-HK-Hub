@@ -61,7 +61,7 @@ def chunk_text(text: str, chunk_size: int = 500, overlap: int = 50) -> Iterable[
         yield text[start:end]
         if end == length:
             break
-        start = max(start + 1, end - overlap)
+        start = end - overlap
 
 
 def ingest_corpus(config: AppConfig, *, reset: bool = True) -> int:

@@ -51,8 +51,17 @@ def parse_events(text: str) -> list[dict[str, str]]:
         for pattern in date_patterns:
             match = re.search(pattern, line)
             if match:
-                date = match.group(0)
-                break
+                candidate = match.group(0)
+                if pattern == date_patterns[2]:
+                    month = int(match.group(1))
+                    day = int(match.group(2))
+                else:
+                    parts = re.split(r"[/-]", candidate)
+                    month = int(parts[-2])
+                    day = int(parts[-1])
+                if 1 <= month <= 12 and 1 <= day <= 31:
+                    date = candidate
+                    break
         time_match = re.search(time_pattern, line)
         time = time_match.group(0) if time_match else "待确认时间"
         title = line.replace(date, "").replace(time, "").strip() or "未命名活动"
@@ -84,13 +93,13 @@ def handle_planner(text: str) -> tuple[str, str]:
     return format_list(result.plan, "暂无规划结果。"), result.verification
 
 
-def handle_events(text: str, file_path: str | None) -> tuple[str, str]:
+def handle_events(text: str, file_data: bytes | None) -> tuple[str, str]:
     text = text.strip()
     events = []
     error_note = ""
-    if file_path:
+    if file_data:
         try:
-            events = vision_client.parse_events(file_path)
+            events = vision_client.parse_events(file_data)
         except (ConfigError, ServiceError) as exc:
             error_note = f"视觉解析失败：{exc}"
     if not events and text:
@@ -107,10 +116,10 @@ def handle_events(text: str, file_path: str | None) -> tuple[str, str]:
     return format_list(event_lines, "暂无活动解析结果。"), conflict_message
 
 
-def describe_event_file(file_path: str | None) -> str:
-    if not file_path:
+def describe_event_file(file_data: bytes | None) -> str:
+    if not file_data:
         return "未选择活动截图。"
-    return f"已选择文件：{Path(file_path).name}"
+    return "已上传活动截图。"
 
 
 def _fetch_metrics() -> tuple[str, str, str, int | None]:
@@ -164,7 +173,9 @@ def search_rag(query: str) -> str:
         return "暂无匹配文档，请尝试其它关键词。"
     lines = []
     for result in results:
-        title = result.metadata.get("title") or Path(result.metadata.get("source", "")).name or "参考资料"
+        source = result.metadata.get("source") or ""
+        source_name = Path(source).name if source else ""
+        title = result.metadata.get("title") or source_name or "参考资料"
         snippet = result.document.replace("\n", " ").strip()
         lines.append(f"{title}：{snippet[:120]}...")
     return format_list(lines, "暂无匹配文档，请尝试其它关键词。")
@@ -216,7 +227,7 @@ with gr.Blocks(title="SZ-HK Hub · 深港跨境专业生活助手") as demo:
 
         with gr.Column():
             gr.Markdown("### 活动/情报解析 (Vision)")
-            event_file = gr.File(label="上传活动截图", file_count="single", type="filepath")
+            event_file = gr.File(label="上传活动截图", file_count="single", type="binary")
             event_file_note = gr.Textbox(value="未选择活动截图。", interactive=False)
             event_file.change(
                 fn=describe_event_file,
