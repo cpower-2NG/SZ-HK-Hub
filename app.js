@@ -110,7 +110,7 @@ function parseEvents(text) {
     /(\d{1,2}[/-]\d{1,2})/,
     /(\d{1,2})月(\d{1,2})日/,
   ];
-  const timeRegexPattern = /([01]?\d|2[0-3]):([0-5]\d)/;
+  const timePattern = /([01]?\d|2[0-3]):([0-5]\d)/;
 
   return lines.map((line) => {
     let date = "待确认日期";
@@ -121,7 +121,7 @@ function parseEvents(text) {
         break;
       }
     }
-    const timeMatch = line.match(timeRegexPattern);
+    const timeMatch = line.match(timePattern);
     const time = timeMatch ? timeMatch[0] : "待确认时间";
     const title = line.replace(date, "").replace(time, "").trim() || "未命名活动";
     return { date, time, title };
