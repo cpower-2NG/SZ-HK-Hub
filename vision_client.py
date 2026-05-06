@@ -4,6 +4,7 @@ import base64
 import json
 import mimetypes
 import re
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -109,8 +110,14 @@ class VisionClient:
         path = Path(file_path)
         if not path.exists():
             raise ServiceError("未找到上传的图片文件")
-        media_type = mimetypes.guess_type(path.name)[0] or "image/png"
-        encoded = base64.b64encode(path.read_bytes()).decode("utf-8")
+        resolved = path.resolve()
+        allowed_roots = {Path.cwd().resolve(), Path(tempfile.gettempdir()).resolve()}
+        if not any(root == resolved or root in resolved.parents for root in allowed_roots):
+            raise ServiceError("不允许的文件路径")
+        if not resolved.is_file() or resolved.is_symlink():
+            raise ServiceError("上传文件不可读取")
+        media_type = mimetypes.guess_type(resolved.name)[0] or "image/png"
+        encoded = base64.b64encode(resolved.read_bytes()).decode("utf-8")
         return encoded, media_type
 
     def _extract_events(self, content: str) -> list[dict[str, str]]:
@@ -131,7 +138,7 @@ class VisionClient:
         try:
             return json.loads(content)
         except json.JSONDecodeError:
-            match = re.search(r"\{.*\}", content, re.S)
+            match = re.search(r"\{.*?\}", content, re.S)
             if not match:
                 raise ServiceError("视觉模型未返回可解析的 JSON")
             try:

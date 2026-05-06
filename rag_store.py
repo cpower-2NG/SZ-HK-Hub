@@ -50,6 +50,10 @@ class RAGStore:
 
 
 def chunk_text(text: str, chunk_size: int = 500, overlap: int = 50) -> Iterable[str]:
+    if chunk_size <= 0:
+        raise ValueError("chunk_size 必须大于 0")
+    if overlap >= chunk_size:
+        raise ValueError("overlap 必须小于 chunk_size")
     start = 0
     length = len(text)
     while start < length:
@@ -57,7 +61,7 @@ def chunk_text(text: str, chunk_size: int = 500, overlap: int = 50) -> Iterable[
         yield text[start:end]
         if end == length:
             break
-        start = end - overlap
+        start = max(start + 1, end - overlap)
 
 
 def ingest_corpus(config: AppConfig, *, reset: bool = True) -> int:

@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, TypedDict
 
-from langgraph.graph import END, StateGraph
+from langgraph.graph import END, CompiledGraph, StateGraph
 
 from errors import ConfigError, ServiceError
 from llm_client import LLMClient
@@ -35,7 +35,7 @@ class PlannerAgent:
         self.llm_client = llm_client
         self.graph = self._build_graph()
 
-    def _build_graph(self):
+    def _build_graph(self) -> CompiledGraph:
         graph = StateGraph(AgentState)
         graph.add_node("route", self._route_intent)
         graph.add_node("execute", self._execute_actions)

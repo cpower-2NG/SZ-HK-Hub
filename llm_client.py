@@ -88,7 +88,7 @@ class LLMClient:
         try:
             return json.loads(content)
         except json.JSONDecodeError:
-            match = re.search(r"\{.*\}", content, re.S)
+            match = re.search(r"\{.*?\}", content, re.S)
             if not match:
                 raise ServiceError("LLM 未返回可解析的 JSON")
             try:
