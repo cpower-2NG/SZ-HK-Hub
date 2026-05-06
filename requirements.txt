@@ -1,0 +1,6 @@
+gradio==6.7.0
+langgraph==0.2.35
+chromadb==0.5.5
+sentence-transformers==3.0.1
+requests==2.32.3
+python-dotenv==1.0.1
