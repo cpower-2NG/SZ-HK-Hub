@@ -1,13 +1,12 @@
 # SZ-HK Hub
-深港跨境专业生活助手（GitHub Pages 演示版）
+深港跨境专业生活助手（Gradio 本地演示版）
 
-## 在线访问
-启用 GitHub Pages 后可通过以下地址访问：
+## 本地运行
+1. 安装依赖：`pip install -r requirements.txt`
+2. 启动应用：`python app.py`
+3. 在浏览器访问提示的本地地址（默认 http://127.0.0.1:7860）
 
-`https://<your-github-username-or-org>.github.io/SZ-HK-Hub/`
-
-## 本地预览
-直接打开 `index.html` 即可查看演示页面，所有数据为前端模拟，可替换为真实 MCP API。
+所有数据为本地模拟演示，可替换为真实 MCP API。
 
 ## 功能亮点
 - 跨境金融导航：输出开户/合规建议
