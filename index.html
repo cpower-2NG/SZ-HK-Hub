@@ -1,0 +1,201 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>SZ-HK Hub · 深港跨境专业生活助手</title>
+    <link rel="stylesheet" href="styles.css" />
+    <script defer src="app.js"></script>
+  </head>
+  <body>
+    <header class="top-bar">
+      <div class="brand">
+        <span class="logo">SZ-HK Hub</span>
+        <span class="subtitle">深港跨境专业生活助手</span>
+      </div>
+      <nav class="nav">
+        <a href="#features">核心能力</a>
+        <a href="#workspace">体验工作台</a>
+        <a href="#architecture">技术架构</a>
+        <a href="#safety">安全护栏</a>
+      </nav>
+    </header>
+
+    <main>
+      <section class="hero">
+        <div class="hero-content">
+          <h1>跨境决策从此更专业</h1>
+          <p>
+            SZ-HK Hub 基于多智能体协作、先进 RAG 以及 MCP 协议，为深港双城生活提供可验证、
+            可追踪、可落地的决策支持。
+          </p>
+          <div class="hero-actions">
+            <a class="primary" href="#workspace">开始体验</a>
+            <a class="secondary" href="#architecture">查看架构</a>
+          </div>
+        </div>
+        <div class="hero-card">
+          <h3>今日跨境概览</h3>
+          <div class="hero-metrics">
+            <div>
+              <span class="metric-label">实时汇率</span>
+              <span id="hero-rate" class="metric-value">1 HKD = 0.92 CNY</span>
+            </div>
+            <div>
+              <span class="metric-label">口岸人流</span>
+              <span id="hero-queue" class="metric-value">深圳湾 28 分钟</span>
+            </div>
+            <div>
+              <span class="metric-label">港铁</span>
+              <span id="hero-mtr" class="metric-value">西九龙 6 分钟一班</span>
+            </div>
+          </div>
+          <p class="tip">数据为模拟演示，可替换为真实 MCP API。</p>
+        </div>
+      </section>
+
+      <section id="features" class="section">
+        <h2>核心能力</h2>
+        <div class="grid cards">
+          <article>
+            <h3>跨境金融导航</h3>
+            <p>聚合最新数字银行开户与合规指南，输出可执行的开户路径。</p>
+          </article>
+          <article>
+            <h3>活动/情报自动化</h3>
+            <p>解析活动文本或截图要点，自动检测日程冲突并提醒。</p>
+          </article>
+          <article>
+            <h3>实时决策支持</h3>
+            <p>整合汇率、口岸人流、港铁班次，推荐最佳通关路线。</p>
+          </article>
+          <article>
+            <h3>多模态解析</h3>
+            <p>支持上传预约截图或活动海报，生成结构化日程信息。</p>
+          </article>
+          <article>
+            <h3>安全护栏</h3>
+            <p>对敏感金融与法律问题自动提醒，避免违规建议。</p>
+          </article>
+        </div>
+      </section>
+
+      <section id="workspace" class="section workspace">
+        <div class="section-header">
+          <h2>体验工作台</h2>
+          <p>输入真实需求，体验多智能体的规划、检索与校验流程。</p>
+        </div>
+        <div class="grid workspace-grid">
+          <article class="panel">
+            <header>
+              <h3>Planner + Verifier</h3>
+              <span id="verify-status" class="status ok">已通过</span>
+            </header>
+            <label for="planner-input">跨境需求描述</label>
+            <textarea
+              id="planner-input"
+              placeholder="例如：下周六去西九龙打卡并参加比赛，顺便在 ZA Bank 开户。"
+            ></textarea>
+            <button id="planner-run">生成规划</button>
+            <ul id="planner-output" class="output-list"></ul>
+          </article>
+
+          <article class="panel">
+            <header>
+              <h3>活动/情报解析</h3>
+              <span class="status neutral">多模态</span>
+            </header>
+            <label class="file-input">
+              上传活动截图
+              <input id="event-file" type="file" accept="image/*" />
+            </label>
+            <textarea
+              id="event-input"
+              placeholder="粘贴活动文案，例如：5月18日 10:00 西九龙篮球赛 / 5月18日 11:00 开户"
+            ></textarea>
+            <button id="event-run">解析日程</button>
+            <p id="event-conflict" class="notice"></p>
+            <ul id="event-output" class="output-list"></ul>
+          </article>
+
+          <article class="panel">
+            <header>
+              <h3>实时决策支持</h3>
+              <span class="status accent">MCP 数据</span>
+            </header>
+            <div class="metrics">
+              <div>
+                <span class="metric-label">汇率</span>
+                <span id="rate-value" class="metric-value">1 HKD = 0.92 CNY</span>
+              </div>
+              <div>
+                <span class="metric-label">深圳湾口岸</span>
+                <span id="queue-value" class="metric-value">预计 28 分钟</span>
+              </div>
+              <div>
+                <span class="metric-label">西九龙港铁</span>
+                <span id="mtr-value" class="metric-value">6 分钟一班</span>
+              </div>
+            </div>
+            <button id="data-refresh">更新数据</button>
+            <div id="route-suggestion" class="highlight">
+              推荐路线：深圳湾口岸 → 西九龙高铁站
+            </div>
+          </article>
+
+          <article class="panel">
+            <header>
+              <h3>RAG 知识检索</h3>
+              <span class="status neutral">知识库</span>
+            </header>
+            <label for="rag-query">政策/开户问题</label>
+            <input id="rag-query" type="text" placeholder="例如：ZA Bank 开户材料" />
+            <button id="rag-search">检索文档</button>
+            <ul id="rag-results" class="output-list"></ul>
+          </article>
+
+          <article id="safety" class="panel">
+            <header>
+              <h3>安全护栏检测</h3>
+              <span class="status warning">合规提示</span>
+            </header>
+            <label for="safety-input">输入敏感问题</label>
+            <input id="safety-input" type="text" placeholder="例如：如何绕过外汇限制？" />
+            <p id="safety-output" class="notice"></p>
+          </article>
+        </div>
+      </section>
+
+      <section id="architecture" class="section">
+        <h2>技术架构概览</h2>
+        <div class="grid cards">
+          <article>
+            <h3>LangGraph 多智能体</h3>
+            <p>Planner 拆解需求，Verifier 进行反思校验，输出可追踪决策链。</p>
+          </article>
+          <article>
+            <h3>Advanced RAG</h3>
+            <p>接入港府、银行、MTR 等动态资料，支持 Hit Rate 与 MRR 评估。</p>
+          </article>
+          <article>
+            <h3>MCP 工具链</h3>
+            <p>统一接入实时汇率、路径规划、本地文件处理等服务。</p>
+          </article>
+          <article>
+            <h3>多模态解析</h3>
+            <p>识别活动海报、预约截图，结构化生成日程。</p>
+          </article>
+          <article>
+            <h3>Safety Guardrails</h3>
+            <p>敏感词过滤 + 人工复核，确保输出合规。</p>
+          </article>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer">
+      <p>© 2026 SZ-HK Hub · 深港跨境专业生活助手（演示版）</p>
+      <p>建议使用 GitHub Pages 直接发布本页面。</p>
+    </footer>
+  </body>
+</html>
