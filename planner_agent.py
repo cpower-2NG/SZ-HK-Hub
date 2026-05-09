@@ -3,7 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, TypedDict
 
-from langgraph.graph import END, CompiledGraph, StateGraph
+from langgraph.graph import END, StateGraph
+from langgraph.graph.graph import CompiledGraph
 
 from errors import ConfigError, ServiceError
 from llm_client import LLMClient
@@ -17,11 +18,11 @@ TOOL_CHOICES = set(TOOL_ORDER)
 
 class AgentState(TypedDict, total=False):
     user_query: str
-    route: dict[str, Any]
+    routing: dict[str, Any]
     rag_results: list[dict[str, Any]]
     tool_results: dict[str, Any]
-    plan: list[str]
-    verification: str
+    plan_steps: list[str]
+    verification_status: str
 
 
 @dataclass
@@ -53,14 +54,14 @@ class PlannerAgent:
     def run(self, user_query: str) -> PlannerResult:
         result = self.graph.invoke({"user_query": user_query})
         return PlannerResult(
-            plan=result.get("plan", []), verification=result.get("verification", "已通过")
+            plan=result.get("plan_steps", []), verification=result.get("verification_status", "已通过")
         )
 
     def _route_intent(self, state: AgentState) -> AgentState:
         query = state.get("user_query", "")
         if not self.llm_client.is_configured:
             return {
-                "route": {
+                "routing": {
                     "intent": "general",
                     "needs_rag": True,
                     "tool_calls": TOOL_ORDER,
@@ -76,10 +77,10 @@ class PlannerAgent:
         )
         route = self.llm_client.chat_json(system_prompt, user_prompt)
         route["tool_calls"] = [tool for tool in route.get("tool_calls", []) if tool in TOOL_CHOICES]
-        return {"route": route}
+        return {"routing": route}
 
     def _execute_actions(self, state: AgentState) -> AgentState:
-        route = state.get("route", {})
+        route = state.get("routing", {})
         query = state.get("user_query", "")
         rag_results = []
         if route.get("needs_rag"):
@@ -108,7 +109,7 @@ class PlannerAgent:
         query = state.get("user_query", "")
         if not self.llm_client.is_configured:
             return {
-                "plan": [
+                "plan_steps": [
                     "请配置 LLM API Key 以启用智能规划。",
                     "若已配置，可重新提交需求生成分步计划。",
                 ]
@@ -131,12 +132,12 @@ class PlannerAgent:
         plan = [task for task in tasks if isinstance(task, str)]
         if not plan:
             raise ServiceError("规划生成失败")
-        return {"plan": plan}
+        return {"plan_steps": plan}
 
     def _verify(self, state: AgentState) -> AgentState:
         query = state.get("user_query", "")
         if any(term in query for term in SENSITIVE_TERMS):
-            return {"verification": "需要人工复核"}
+            return {"verification_status": "需要人工复核"}
         if self.llm_client.is_configured:
             system_prompt = "你是合规审核助手，只回答 JSON。"
             user_prompt = (
@@ -146,5 +147,5 @@ class PlannerAgent:
             )
             verdict = self.llm_client.chat_json(system_prompt, user_prompt)
             if verdict.get("status") == "review":
-                return {"verification": f"需要人工复核：{verdict.get('reason', '').strip()}"}
-        return {"verification": "已通过"}
+                return {"verification_status": f"需要人工复核：{verdict.get('reason', '').strip()}"}
+        return {"verification_status": "已通过"}

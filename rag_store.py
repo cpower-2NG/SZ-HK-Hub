@@ -1,5 +1,9 @@
+"""RAG 存储层 —— 提供向量检索与文档摄入能力。"""
+
 from __future__ import annotations
 
+import os
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
@@ -8,6 +12,10 @@ import chromadb
 from chromadb.utils import embedding_functions
 
 from config import AppConfig
+
+
+# Short timeout for model download to avoid hanging in demo environments
+os.environ.setdefault("HF_HUB_DOWNLOAD_TIMEOUT", "5")
 
 
 @dataclass(frozen=True)
@@ -22,19 +30,47 @@ class RAGStore:
         self.config = config
         self.collection_name = collection_name
         self.client = chromadb.PersistentClient(path=config.rag_db_path)
-        embedding_fn = embedding_functions.SentenceTransformerEmbeddingFunction(
-            model_name=config.embedding_model
-        )
-        self.collection = self.client.get_or_create_collection(
-            name=collection_name, embedding_function=embedding_fn
-        )
+        self._collection = None
+        self._init_error: str | None = None
+
+    def _ensure_collection(self) -> None:
+        if self._collection is not None:
+            return
+        if self._init_error:
+            return
+
+        result: list = [None]
+        exception: list[Exception | None] = [None]
+
+        def _load() -> None:
+            try:
+                embedding_fn = embedding_functions.SentenceTransformerEmbeddingFunction(
+                    model_name=self.config.embedding_model
+                )
+                result[0] = self.client.get_or_create_collection(
+                    name=self.collection_name, embedding_function=embedding_fn
+                )
+            except Exception as exc:
+                exception[0] = exc
+
+        thread = threading.Thread(target=_load, daemon=True)
+        thread.start()
+        thread.join(timeout=10)
+
+        if exception[0] is not None:
+            self._init_error = f"知识库模型加载失败：{exception[0]}"
+        elif result[0] is not None:
+            self._collection = result[0]
+        else:
+            self._init_error = "知识库模型加载超时（网络不可达），请在有网络的环境下运行 rag_ingest.py"
 
     def search(self, query: str, *, top_k: int = 4) -> list[RAGResult]:
         if not query.strip():
             return []
-        if self.collection.count() == 0:
+        self._ensure_collection()
+        if self._collection is None or self._collection.count() == 0:
             return []
-        results = self.collection.query(query_texts=[query], n_results=top_k)
+        results = self._collection.query(query_texts=[query], n_results=top_k)
         documents = results.get("documents", [[]])[0]
         metadatas = results.get("metadatas", [[]])[0]
         distances = results.get("distances", [[]])[0] if results.get("distances") else []
@@ -46,7 +82,10 @@ class RAGStore:
         return output
 
     def has_documents(self) -> bool:
-        return self.collection.count() > 0
+        self._ensure_collection()
+        if self._collection is None:
+            return False
+        return self._collection.count() > 0
 
 
 def chunk_text(text: str, chunk_size: int = 500, overlap: int = 50) -> Iterable[str]:

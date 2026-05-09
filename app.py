@@ -168,6 +168,8 @@ def search_rag(query: str) -> str:
     trimmed = query.strip()
     if not trimmed:
         return "请输入关键词以检索政策或开户信息。"
+    if rag_store._init_error:
+        return f"知识库暂不可用：{rag_store._init_error}"
     results = rag_store.search(trimmed)
     if not results:
         if not rag_store.has_documents():

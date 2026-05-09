@@ -22,6 +22,8 @@ class AppConfig:
     anthropic_api_key: str | None
     anthropic_base_url: str
     anthropic_model: str
+    ollama_base_url: str
+    ollama_model: str
     vision_provider: str
     mcp_base_url: str | None
     mcp_api_key: str | None
@@ -43,6 +45,8 @@ class AppConfig:
             anthropic_api_key=os.getenv("ANTHROPIC_API_KEY"),
             anthropic_base_url=os.getenv("ANTHROPIC_BASE_URL", "https://api.anthropic.com"),
             anthropic_model=os.getenv("ANTHROPIC_MODEL", "claude-3-5-sonnet-20241022"),
+            ollama_base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
+            ollama_model=os.getenv("OLLAMA_MODEL", "qwen2.5:1.5b"),
             vision_provider=os.getenv("VISION_PROVIDER", "openai"),
             mcp_base_url=os.getenv("MCP_BASE_URL"),
             mcp_api_key=os.getenv("MCP_API_KEY"),
