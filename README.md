@@ -1,7 +1,7 @@
 # SZ-HK Hub · 深港跨境专业生活助手
 
 > 基于 LangGraph + 高级 RAG + MCP 工具链，为深港双城生活提供可验证、可追踪、可落地的决策支持。
-> **零 API Key 即可启动**——无任何在线 Key 时自动回退到本地 [Ollama](https://ollama.com)。
+> 核心 LLM 可在无在线 Key 时自动回退到本地 [Ollama](https://ollama.com)，但视觉识别和部分实时数据仍依赖外部服务。
 
 ---
 
@@ -45,7 +45,7 @@ ollama pull qwen2.5:1.5b    # 986 MB，默认模型
 
 ```bash
 cp .env.example .env
-# 编辑 .env：不配任何 Key 也能启动（自动 fallback 到本地 Ollama）
+# 编辑 .env：不配任何在线 Key 也能启动核心文本能力（自动 fallback 到本地 Ollama）
 ```
 
 ### 4. 启动应用
@@ -75,6 +75,26 @@ python app.py
          → [Plan] 生成步骤 → [Verify] 合规校验 → 输出结果
 ```
 
+## 实现状态总览
+
+以下表格按当前仓库代码的实际实现情况整理，区分已实现、部分实现和未完善项。
+
+| 功能 | 当前状态 | 实际实现内容 | 备注 |
+|------|----------|--------------|------|
+| Gradio 主应用入口 | 已实现 | [app.py](app.py) 负责启动 Web UI，包含概览、规划、活动解析、实时决策、RAG 和安全护栏模块 | 当前正式入口是 `python app.py` |
+| Planner + Verifier | 已实现 | [planner_agent.py](planner_agent.py) 使用 LangGraph 组织 route -> execute -> plan -> verify 流程 | LLM 不可用时会降级为简化规划 |
+| LLM 多供应商回退 | 已实现 | [llm_client.py](llm_client.py) 支持 OpenAI、Anthropic，未配置在线 Key 时回退到 Ollama | Ollama 仅覆盖文本推理，不覆盖视觉 |
+| 文本活动解析与冲突检测 | 已实现 | [app.py](app.py) 中用正则解析日期/时间并检测同一时刻的重复事件 | 适合文本输入，规则较简单 |
+| 截图/海报视觉解析 | 部分实现 | [vision_client.py](vision_client.py) 支持 OpenAI / Anthropic Vision 从图片中抽取活动信息 | 需要对应 API Key，未做本地视觉模型回退 |
+| 实时决策支持 | 部分实现 | [mcp_client.py](mcp_client.py) 提供汇率、口岸人流、港铁班次读取；[app.py](app.py) 用这些数据给出推荐路线 | 汇率直接走公开 API，不走 MCP；口岸和港铁依赖外部 MCP 服务 |
+| RAG 知识检索 | 部分实现 | [rag_store.py](rag_store.py) 支持 ChromaDB 持久化检索，[rag_ingest.py](rag_ingest.py) 支持语料摄入 | 默认语料为空，且首次加载 embedding 模型需要网络 |
+| 安全护栏检测 | 已实现 | [planner_agent.py](planner_agent.py) 和 [app.py](app.py) 都有敏感词过滤与人工复核提示 | 目前主要是规则 + LLM 复核，未做更细粒度策略引擎 |
+| RAG 语料构建脚本 | 已实现 | [rag_ingest.py](rag_ingest.py) 可将 `rag_corpus/` 下的 `.md` / `.txt` 写入向量库 | 需要用户自行补充语料 |
+| 交互式静态前端 | 未接入主流程 | [index.html](index.html)、[styles.css](styles.css)、[app.js](app.js) 提供了一套独立演示页 | 这套页面没有接入 [app.py](app.py)，当前不是正式运行入口 |
+| 自定义 MCP Server 能力 | 未实现 | 当前 [MCPClient](mcp_client.py) 只会调用配置好的 HTTP 工具接口 | 还没有内置 Google Maps、本地文件操作等自定义工具 |
+| 测试与评估体系 | 未完善 | 方案书中提到的 20+ pytest、检索质量报告、Trace 评估在仓库中尚未落地 | 目前缺少系统化自动测试与指标脚本 |
+| 预置知识库内容 | 未完善 | `rag_corpus/` 目录存在，但仓库里没有默认政策/开户资料 | 需要手动加入资料后再构建向量库 |
+
 ---
 
 ## 配置说明
@@ -89,7 +109,7 @@ python app.py
 | 2 | **Anthropic** | 设置了 `ANTHROPIC_API_KEY`（且无 OpenAI Key） |
 | 3 | **Ollama（回退）** | 以上均未设置，但本地 Ollama 服务可达 |
 
-> 无需任何 API Key——安装 Ollama 并拉取一个模型即可全功能体验。
+> 无需任何在线 API Key——安装 Ollama 并拉取一个模型即可体验核心文本规划能力；视觉识别和部分实时数据仍需对应外部服务。
 
 ### 关键环境变量
 
