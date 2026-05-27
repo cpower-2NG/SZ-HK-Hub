@@ -31,15 +31,10 @@ class MTRSchedule:
 
 PORT_ALIASES = {
     "深圳湾": ["深圳灣", "深圳灣口岸", "Shenzhen Bay", "Shenzhen Bay Control Point"],
-    "深圳灣": ["深圳湾", "深圳湾口岸", "Shenzhen Bay", "Shenzhen Bay Control Point"],
     "福田": ["福田口岸", "Futian", "Lok Ma Chau Spur Line", "落馬洲支線"],
-    "福田口岸": ["福田", "Futian", "Lok Ma Chau Spur Line", "落馬洲支線"],
     "罗湖": ["罗湖口岸", "羅湖口岸", "Lo Wu"],
-    "羅湖": ["罗湖口岸", "羅湖口岸", "Lo Wu"],
     "皇岗": ["皇岗口岸", "皇崗口岸", "Lok Ma Chau", "Lok Ma Chau Control Point"],
-    "皇崗": ["皇岗口岸", "皇崗口岸", "Lok Ma Chau", "Lok Ma Chau Control Point"],
     "莲塘": ["莲塘口岸", "蓮塘口岸", "香园围", "Heung Yuen Wai"],
-    "蓮塘": ["莲塘口岸", "蓮塘口岸", "香园围", "Heung Yuen Wai"],
 }
 
 MTR_STATION_ALIASES = {
@@ -122,7 +117,11 @@ class MCPClient:
             return url.format(base=base)
         if "base=" in url:
             return re.sub(r"base=[A-Za-z]{3}", f"base={base}", url)
-        return re.sub(r"/latest/[A-Za-z]{3}", f"/latest/{base}", url)
+        if re.search(r"/latest/[A-Za-z]{3}", url):
+            return re.sub(r"/latest/[A-Za-z]{3}", f"/latest/{base}", url)
+        if base == "HKD":
+            return url
+        raise ServiceError("汇率接口 URL 未提供 base 占位符")
 
     def _extract_exchange_rate(self, data: dict[str, Any], target: str) -> float | None:
         if not data:
@@ -211,10 +210,13 @@ class MCPClient:
         )
 
     def _aliases_for_port(self, normalized: str) -> list[str]:
-        aliases = []
+        aliases: list[str] = []
         for key, values in PORT_ALIASES.items():
             if self._normalize_port_name(key) == normalized:
-                aliases.extend(values)
+                return [*values, key]
+            for alias in values:
+                if self._normalize_port_name(alias) == normalized:
+                    return [*values, key]
         return aliases
 
     def _name_matches(self, target: str, candidate: str, aliases: list[str]) -> bool:
@@ -270,6 +272,7 @@ class MCPClient:
             minutes.append(value_num)
         if minutes:
             if len(minutes) > 1 and re.search(r"[-~至]|to", lowered):
+                # 多个区间值时取平均值作为估算
                 return int(round(sum(minutes) / len(minutes)))
             return int(round(sum(minutes)))
         digits = re.findall(r"\d+", lowered)
@@ -382,6 +385,7 @@ class MCPClient:
         if len(times) >= 2:
             diff = times[1] - times[0]
             if diff < 0:
+                # 跨越午夜时，将负差值平移到次日区间
                 diff += 24 * 60
             return diff if diff else None
         return None

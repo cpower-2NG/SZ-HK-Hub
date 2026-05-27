@@ -63,7 +63,7 @@ def test_get_port_traffic_falls_back_to_api(make_config, monkeypatch) -> None:
     )
 
     def fake_get(url, timeout):
-        assert "example.com" in url
+        assert url == "https://example.com"
         return _resp(
             200,
             [

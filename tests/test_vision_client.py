@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 import pytest
 
 from errors import ServiceError
@@ -54,3 +55,26 @@ def test_parse_events_routes_by_provider(make_config, monkeypatch) -> None:
 
     events = client.parse_events(PNG_HEADER + b"demo")
     assert events[0]["title"] == "a"
+
+
+def test_extract_events_from_text_parses_date_time(make_config) -> None:
+    client = VisionClient(make_config())
+    events = client._extract_events_from_text("2024-05-18 10:00 西九龙篮球赛")
+    assert events[0]["date"] == "2024-05-18"
+    assert events[0]["time"] == "10:00"
+    assert "西九龙篮球赛" in events[0]["title"]
+
+
+def test_extract_events_from_text_invalid_date(make_config) -> None:
+    client = VisionClient(make_config())
+    events = client._extract_events_from_text("2月31日 10:00 活动")
+    assert events[0]["date"] == "待确认日期"
+
+
+def test_strip_matches_removes_only_matches(make_config) -> None:
+    client = VisionClient(make_config())
+    line = "2024-05-18 10:00 10-15 celebration"
+    date_match = re.search(r"(\d{4}[/-]\d{1,2}[/-]\d{1,2})", line)
+    time_match = re.search(r"([01]?\d|2[0-3]):([0-5]\d)", line)
+    title = client._strip_matches(line, [date_match, time_match])
+    assert "10-15 celebration" in title
