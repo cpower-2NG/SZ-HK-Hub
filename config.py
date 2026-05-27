@@ -25,9 +25,15 @@ class AppConfig:
     ollama_base_url: str
     ollama_model: str
     vision_provider: str
+    ocr_space_api_url: str
+    ocr_space_api_key: str | None
     mcp_base_url: str | None
     mcp_api_key: str | None
     exchange_rate_api_url: str
+    port_wait_time_api_url: str
+    mtr_schedule_api_url: str
+    mtr_default_line: str
+    mtr_default_station: str
     mcp_port_tool: str
     mcp_mtr_tool: str
     mcp_exchange_tool: str
@@ -48,11 +54,23 @@ class AppConfig:
             ollama_base_url=os.getenv("OLLAMA_BASE_URL", "http://localhost:11434"),
             ollama_model=os.getenv("OLLAMA_MODEL", "qwen2.5:1.5b"),
             vision_provider=os.getenv("VISION_PROVIDER", "openai"),
+            ocr_space_api_url=os.getenv("OCR_SPACE_API_URL", "https://api.ocr.space/parse/image"),
+            ocr_space_api_key=os.getenv("OCR_SPACE_API_KEY"),
             mcp_base_url=os.getenv("MCP_BASE_URL"),
             mcp_api_key=os.getenv("MCP_API_KEY"),
             exchange_rate_api_url=os.getenv(
                 "EXCHANGE_RATE_API_URL", "https://open.er-api.com/v6/latest/HKD"
             ),
+            port_wait_time_api_url=os.getenv(
+                "PORT_WAIT_TIME_API_URL",
+                "https://www.immd.gov.hk/opendata/control-points/estimated-waiting-time-zh.json",
+            ),
+            mtr_schedule_api_url=os.getenv(
+                "MTR_SCHEDULE_API_URL",
+                "https://rt.data.gov.hk/v1/transport/mtr/getSchedule.php",
+            ),
+            mtr_default_line=os.getenv("MTR_DEFAULT_LINE", "TML"),
+            mtr_default_station=os.getenv("MTR_DEFAULT_STATION", "AUS"),
             mcp_port_tool=os.getenv("MCP_PORT_TOOL", "port_traffic"),
             mcp_mtr_tool=os.getenv("MCP_MTR_TOOL", "mtr_schedule"),
             mcp_exchange_tool=os.getenv("MCP_EXCHANGE_TOOL", "exchange_rate"),

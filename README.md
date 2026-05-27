@@ -85,8 +85,8 @@ python app.py
 | Planner + Verifier | 已实现 | [planner_agent.py](planner_agent.py) 使用 LangGraph 组织 route -> execute -> plan -> verify 流程 | LLM 不可用时会降级为简化规划 |
 | LLM 多供应商回退 | 已实现 | [llm_client.py](llm_client.py) 支持 OpenAI、Anthropic，未配置在线 Key 时回退到 Ollama | Ollama 仅覆盖文本推理，不覆盖视觉 |
 | 文本活动解析与冲突检测 | 已实现 | [app.py](app.py) 中用正则解析日期/时间并检测同一时刻的重复事件 | 适合文本输入，规则较简单 |
-| 截图/海报视觉解析 | 部分实现 | [vision_client.py](vision_client.py) 支持 OpenAI / Anthropic Vision 从图片中抽取活动信息 | 需要对应 API Key，未做本地视觉模型回退 |
-| 实时决策支持 | 部分实现 | [mcp_client.py](mcp_client.py) 提供汇率、口岸人流、港铁班次读取；[app.py](app.py) 用这些数据给出推荐路线 | 汇率直接走公开 API，不走 MCP；口岸和港铁依赖外部 MCP 服务 |
+| 截图/海报视觉解析 | 部分实现 | [vision_client.py](vision_client.py) 支持 OpenAI / Anthropic Vision 从图片中抽取活动信息 | 可切换 OCR.Space 作为轻量视觉 API（需 API Key） |
+| 实时决策支持 | 部分实现 | [mcp_client.py](mcp_client.py) 提供汇率、口岸人流、港铁班次读取；[app.py](app.py) 用这些数据给出推荐路线 | 汇率/口岸/港铁支持公开 API 直连或 MCP 工具调用 |
 | RAG 知识检索 | 部分实现 | [rag_store.py](rag_store.py) 支持 ChromaDB 持久化检索，[rag_ingest.py](rag_ingest.py) 支持语料摄入 | 默认语料为空，且首次加载 embedding 模型需要网络 |
 | 安全护栏检测 | 已实现 | [planner_agent.py](planner_agent.py) 和 [app.py](app.py) 都有敏感词过滤与人工复核提示 | 目前主要是规则 + LLM 复核，未做更细粒度策略引擎 |
 | RAG 语料构建脚本 | 已实现 | [rag_ingest.py](rag_ingest.py) 可将 `rag_corpus/` 下的 `.md` / `.txt` 写入向量库 | 需要用户自行补充语料 |
@@ -121,6 +121,12 @@ python app.py
 | `OLLAMA_MODEL` | `qwen2.5:1.5b` | Ollama 模型名称 |
 | `MCP_BASE_URL` | — | MCP Server 地址（可选） |
 | `EXCHANGE_RATE_API_URL` | `https://open.er-api.com/v6/latest/HKD` | 汇率 API |
+| `PORT_WAIT_TIME_API_URL` | `https://www.immd.gov.hk/opendata/control-points/estimated-waiting-time-zh.json` | 口岸等待时间 API |
+| `MTR_SCHEDULE_API_URL` | `https://rt.data.gov.hk/v1/transport/mtr/getSchedule.php` | 港铁班次 API |
+| `MTR_DEFAULT_LINE` | `TML` | 港铁默认线路代码 |
+| `MTR_DEFAULT_STATION` | `AUS` | 港铁默认站点代码 |
+| `OCR_SPACE_API_URL` | `https://api.ocr.space/parse/image` | OCR.Space 视觉接口 |
+| `OCR_SPACE_API_KEY` | — | OCR.Space API Key（可选） |
 | `RAG_CORPUS_PATH` | `./rag_corpus` | 知识库原始文档目录 |
 | `EMBEDDING_MODEL` | `sentence-transformers/all-MiniLM-L6-v2` | 向量化模型 |
 
@@ -179,7 +185,7 @@ python rag_ingest.py --reset
 
 ## MCP 工具约定
 
-MCP Server 需提供以下工具（可通过 REST 网关转发）：
+MCP Server 需提供以下工具（可通过 REST 网关转发）。若未配置 MCP，则系统会改用公开 API：
 
 | 工具 | 输入 | 输出 |
 |------|------|------|

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 from typing import Any
 
 import requests
@@ -17,6 +18,8 @@ class VisionClient:
     def parse_events(self, file_data: bytes) -> list[dict[str, str]]:
         if self.config.vision_provider == "anthropic":
             return self._parse_with_anthropic(file_data)
+        if self.config.vision_provider == "ocrspace":
+            return self._parse_with_ocrspace(file_data)
         return self._parse_with_openai(file_data)
 
     def _parse_with_openai(self, file_data: bytes) -> list[dict[str, str]]:
@@ -102,6 +105,28 @@ class VisionClient:
         content = "".join(block.get("text", "") for block in data.get("content", []))
         return self._extract_events(content)
 
+    def _parse_with_ocrspace(self, file_data: bytes) -> list[dict[str, str]]:
+        if not self.config.ocr_space_api_key:
+            raise ConfigError("未配置 OCR_SPACE_API_KEY")
+        url = self.config.ocr_space_api_url
+        headers = {"apikey": self.config.ocr_space_api_key}
+        files = {"file": ("upload.png", file_data)}
+        data = {"isOverlayRequired": "false"}
+        response = requests.post(
+            url, headers=headers, files=files, data=data, timeout=self.config.request_timeout
+        )
+        if response.status_code >= 400:
+            raise ServiceError(f"视觉 OCR 调用失败：{response.status_code} {response.text}")
+        payload = response.json()
+        if payload.get("IsErroredOnProcessing"):
+            error_message = payload.get("ErrorMessage") or payload.get("ErrorDetails") or "unknown"
+            raise ServiceError(f"视觉 OCR 解析失败：{error_message}")
+        parsed_results = payload.get("ParsedResults") or []
+        text = "\n".join(result.get("ParsedText", "") for result in parsed_results).strip()
+        if not text:
+            raise ServiceError("视觉 OCR 未识别到文字")
+        return self._extract_events_from_text(text)
+
     def _encode_image(self, file_data: bytes) -> tuple[str, str]:
         if not file_data:
             raise ServiceError("未找到上传的图片内容")
@@ -133,6 +158,41 @@ class VisionClient:
             }
             for event in events
         ]
+
+    def _extract_events_from_text(self, text: str) -> list[dict[str, str]]:
+        lines = [line.strip() for line in text.splitlines() if line.strip()]
+        if not lines:
+            lines = [text.strip()]
+        date_patterns = [
+            r"(\d{4}[/-]\d{1,2}[/-]\d{1,2})",
+            r"(\d{1,2}[/-]\d{1,2})",
+            r"(\d{1,2})月(\d{1,2})日",
+        ]
+        time_pattern = r"([01]?\d|2[0-3]):([0-5]\d)"
+        events = []
+        for line in lines:
+            date = "待确认日期"
+            for pattern in date_patterns:
+                match = re.search(pattern, line)
+                if match:
+                    candidate = match.group(0)
+                    if pattern == date_patterns[2]:
+                        month = int(match.group(1))
+                        day = int(match.group(2))
+                    else:
+                        parts = re.split(r"[/-]", candidate)
+                        if len(parts) < 2:
+                            continue
+                        month = int(parts[-2])
+                        day = int(parts[-1])
+                    if 1 <= month <= 12 and 1 <= day <= 31:
+                        date = candidate
+                        break
+            time_match = re.search(time_pattern, line)
+            time = time_match.group(0) if time_match else "待确认时间"
+            title = line.replace(date, "").replace(time, "").strip() or "未命名活动"
+            events.append({"date": date, "time": time, "title": title})
+        return events
 
     def _safe_json(self, content: str) -> dict[str, Any]:
         try:

@@ -57,6 +57,51 @@ def test_get_port_traffic_parses_multiple_keys(make_config, monkeypatch) -> None
     assert result.queue_minutes == 18
 
 
+def test_get_port_traffic_falls_back_to_api(make_config, monkeypatch) -> None:
+    client = MCPClient(
+        make_config(mcp_base_url=None, port_wait_time_api_url="https://example.com")
+    )
+
+    def fake_get(url, timeout):
+        assert "example.com" in url
+        return _resp(
+            200,
+            [
+                {
+                    "controlPoint": "深圳灣口岸",
+                    "direction": "Departure",
+                    "waitingTime": "Less than 30 minutes",
+                }
+            ],
+        )
+
+    monkeypatch.setattr(mcp_module.requests, "get", fake_get)
+    result = client.get_port_traffic("深圳湾")
+    assert result.queue_minutes == 30
+
+
+def test_get_mtr_schedule_falls_back_to_api(make_config, monkeypatch) -> None:
+    client = MCPClient(
+        make_config(mcp_base_url=None, mtr_schedule_api_url="https://example.com")
+    )
+
+    def fake_get(url, params, timeout):
+        assert "example.com" in url
+        assert params["line"] == "tml"
+        assert params["sta"] == "AUS"
+        return _resp(
+            200,
+            {
+                "status": 1,
+                "data": {"TML": {"AUS": {"UP": [{"time": "1010"}, {"time": "1016"}]}}},
+            },
+        )
+
+    monkeypatch.setattr(mcp_module.requests, "get", fake_get)
+    result = client.get_mtr_schedule("西九龙")
+    assert result.interval_minutes == 6
+
+
 def test_get_mtr_schedule_http_error(make_config, monkeypatch) -> None:
     client = MCPClient(make_config(mcp_base_url="https://mcp.example"))
 
