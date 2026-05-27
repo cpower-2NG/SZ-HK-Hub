@@ -31,15 +31,24 @@ class MTRSchedule:
 
 PORT_ALIASES = {
     "深圳湾": ["深圳灣", "深圳灣口岸", "Shenzhen Bay", "Shenzhen Bay Control Point"],
+    "深圳灣": ["深圳湾", "深圳湾口岸", "Shenzhen Bay", "Shenzhen Bay Control Point"],
     "福田": ["福田口岸", "Futian", "Lok Ma Chau Spur Line", "落馬洲支線"],
+    "福田口岸": ["福田", "Futian", "Lok Ma Chau Spur Line", "落馬洲支線"],
     "罗湖": ["罗湖口岸", "羅湖口岸", "Lo Wu"],
+    "羅湖": ["罗湖口岸", "羅湖口岸", "Lo Wu"],
     "皇岗": ["皇岗口岸", "皇崗口岸", "Lok Ma Chau", "Lok Ma Chau Control Point"],
+    "皇崗": ["皇岗口岸", "皇崗口岸", "Lok Ma Chau", "Lok Ma Chau Control Point"],
     "莲塘": ["莲塘口岸", "蓮塘口岸", "香园围", "Heung Yuen Wai"],
+    "蓮塘": ["莲塘口岸", "蓮塘口岸", "香园围", "Heung Yuen Wai"],
 }
 
 MTR_STATION_ALIASES = {
     "西九龙": ("TML", "AUS"),
     "西九龍": ("TML", "AUS"),
+    "西九龙站": ("TML", "AUS"),
+    "西九龍站": ("TML", "AUS"),
+    "西九龙高铁": ("TML", "AUS"),
+    "西九龍高鐵": ("TML", "AUS"),
     "柯士甸": ("TML", "AUS"),
     "九龙": ("TCL", "KOW"),
     "香港": ("AEL", "HOK"),
@@ -161,7 +170,7 @@ class MCPClient:
         self, port: str, records: list[dict[str, Any]]
     ) -> dict[str, Any] | None:
         normalized = self._normalize_port_name(port)
-        aliases = PORT_ALIASES.get(normalized, [])
+        aliases = self._aliases_for_port(normalized)
         fallback = None
         for record in records:
             names = self._extract_port_names(record)
@@ -199,8 +208,14 @@ class MCPClient:
             normalized.replace("口岸", "")
             .replace("關口", "")
             .replace("controlpoint", "")
-            .replace("control", "")
         )
+
+    def _aliases_for_port(self, normalized: str) -> list[str]:
+        aliases = []
+        for key, values in PORT_ALIASES.items():
+            if self._normalize_port_name(key) == normalized:
+                aliases.extend(values)
+        return aliases
 
     def _name_matches(self, target: str, candidate: str, aliases: list[str]) -> bool:
         candidate_norm = self._normalize_port_name(candidate)
@@ -254,7 +269,9 @@ class MCPClient:
                 value_num *= 60
             minutes.append(value_num)
         if minutes:
-            return int(round(sum(minutes) / len(minutes)))
+            if len(minutes) > 1 and re.search(r"[-~至]|to", lowered):
+                return int(round(sum(minutes) / len(minutes)))
+            return int(round(sum(minutes)))
         digits = re.findall(r"\d+", lowered)
         if digits:
             return int(digits[0])
@@ -278,10 +295,20 @@ class MCPClient:
         return MTRSchedule(station=station, interval_minutes=interval)
 
     def _resolve_mtr_codes(self, station: str) -> tuple[str, str]:
+        normalized = self._normalize_station_name(station)
         for key, value in MTR_STATION_ALIASES.items():
-            if key in station:
+            if normalized == self._normalize_station_name(key):
                 return value
         return self.config.mtr_default_line, self.config.mtr_default_station
+
+    def _normalize_station_name(self, station: str) -> str:
+        normalized = re.sub(r"[\s\-_()（）]", "", station).lower()
+        return (
+            normalized.replace("站", "")
+            .replace("車站", "")
+            .replace("高铁", "")
+            .replace("高鐵", "")
+        )
 
     def _format_mtr_schedule_request(self, line: str, station_code: str) -> tuple[str, dict[str, str] | None]:
         url = self.config.mtr_schedule_api_url
@@ -353,7 +380,9 @@ class MCPClient:
             if minutes is not None:
                 times.append(minutes)
         if len(times) >= 2:
-            diff = (times[1] - times[0]) % (24 * 60)
+            diff = times[1] - times[0]
+            if diff < 0:
+                diff += 24 * 60
             return diff if diff else None
         return None
 

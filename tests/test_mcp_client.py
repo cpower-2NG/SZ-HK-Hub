@@ -23,7 +23,7 @@ def test_get_exchange_rate_success(make_config, monkeypatch) -> None:
     client = MCPClient(make_config(exchange_rate_api_url="https://example.com"))
 
     def fake_get(url, timeout):
-        assert "example.com" in url
+        assert url == "https://example.com"
         return _resp(200, {"rates": {"CNY": 0.93}})
 
     monkeypatch.setattr(mcp_module.requests, "get", fake_get)
@@ -86,7 +86,7 @@ def test_get_mtr_schedule_falls_back_to_api(make_config, monkeypatch) -> None:
     )
 
     def fake_get(url, params, timeout):
-        assert "example.com" in url
+        assert url == "https://example.com"
         assert params["line"] == "tml"
         assert params["sta"] == "AUS"
         return _resp(

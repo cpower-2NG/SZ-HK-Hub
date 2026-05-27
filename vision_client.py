@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import re
+from datetime import datetime
 from typing import Any
 
 import requests
@@ -172,6 +173,7 @@ class VisionClient:
         events = []
         for line in lines:
             date = "待确认日期"
+            date_match = None
             for pattern in date_patterns:
                 match = re.search(pattern, line)
                 if match:
@@ -179,20 +181,44 @@ class VisionClient:
                     if pattern == date_patterns[2]:
                         month = int(match.group(1))
                         day = int(match.group(2))
+                        year = datetime.now().year
                     else:
                         parts = re.split(r"[/-]", candidate)
                         if len(parts) < 2:
                             continue
-                        month = int(parts[-2])
-                        day = int(parts[-1])
-                    if 1 <= month <= 12 and 1 <= day <= 31:
+                        if len(parts) == 3:
+                            year = int(parts[0])
+                            month = int(parts[1])
+                            day = int(parts[2])
+                        else:
+                            year = datetime.now().year
+                            month = int(parts[-2])
+                            day = int(parts[-1])
+                    if self._is_valid_date(year, month, day):
                         date = candidate
+                        date_match = match
                         break
             time_match = re.search(time_pattern, line)
             time = time_match.group(0) if time_match else "待确认时间"
-            title = line.replace(date, "").replace(time, "").strip() or "未命名活动"
+            title = self._strip_matches(line, [match for match in [date_match, time_match] if match])
             events.append({"date": date, "time": time, "title": title})
         return events
+
+    def _strip_matches(self, text: str, matches: list[re.Match]) -> str:
+        if not matches:
+            return text.strip() or "未命名活动"
+        spans = sorted((match.span() for match in matches), reverse=True)
+        result = text
+        for start, end in spans:
+            result = result[:start] + result[end:]
+        return result.strip() or "未命名活动"
+
+    def _is_valid_date(self, year: int, month: int, day: int) -> bool:
+        try:
+            datetime(year, month, day)
+            return True
+        except ValueError:
+            return False
 
     def _safe_json(self, content: str) -> dict[str, Any]:
         try:
