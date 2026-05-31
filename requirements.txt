@@ -1,0 +1,15 @@
+# ── 核心框架 ──
+gradio==6.7.0
+langgraph==0.2.35
+
+# ── RAG 向量检索 ──
+chromadb==0.5.5
+sentence-transformers==3.0.1
+
+# ── HTTP / 环境 ──
+requests==2.32.3
+python-dotenv==1.0.1
+
+# ── Ollama 回退（无需额外安装，通过 requests 调用本地 API） ──
+# 安装 Ollama: https://ollama.com
+# 拉取模型:  ollama pull qwen2.5:1.5b
