@@ -1,232 +1,112 @@
-# SZ-HK Hub · 深港跨境专业生活助手
+# SZ-HK Hub · 深港跨境生活 AI 助手
 
-> 基于 LangGraph + 高级 RAG + MCP 工具链，为深港双城生活提供可验证、可追踪、可落地的决策支持。
-> 核心 LLM 可在无在线 Key 时自动回退到本地 [Ollama](https://ollama.com)，但视觉识别和部分实时数据仍依赖外部服务。
+[![Python](https://img.shields.io/badge/python-3.10%2B-blue)](https://www.python.org/)
+[![LangGraph](https://img.shields.io/badge/agent-LangGraph-0f766e)](https://langchain-ai.github.io/langgraph/)
+[![License](https://img.shields.io/badge/license-MIT-green)](./LICENSE)
+
+> 一个面向深港双城生活场景的 AI Agent 应用。通过 LangGraph 多智能体协作、高级 RAG 知识库与 MCP 实时工具协议，为跨境出行、金融开户、合规清关等场景提供**可验证、可追踪、可落地**的决策支持。
 
 ---
 
 ## 目录
 
+- [核心能力](#核心能力)
 - [快速开始](#快速开始)
-- [功能概览](#功能概览)
-- [配置说明](#配置说明)
-- [Ollama 本地回退](#ollama-本地回退)
-- [RAG 知识库](#rag-知识库)
-- [MCP 工具约定](#mcp-工具约定)
-- [项目结构](#项目结构)
 - [技术架构](#技术架构)
+- [项目结构](#项目结构)
+- [配置说明](#配置说明)
+- [改进路线图](#改进路线图)
+- [开发指南](#开发指南)
 - [License](#license)
+
+---
+
+## 核心能力
+
+### 智能跨境规划
+
+用户输入出行需求后，LangGraph Agent 自动编排全流程：
+
+```
+结构化表单 + 附件上传 → 意图路由 → RAG 检索 + MCP 工具调用 → 规划生成 → 合规校验 → 结果输出
+```
+
+每一步均由 LLM（支持 OpenAI / Anthropic / 本地 Ollama 回退）驱动决策。
+
+### 实时决策支持
+
+| 数据源 | 说明 | 更新频率 |
+|--------|------|----------|
+| 💱 实时汇率 | HKD ↔ CNY，主备双 API 自动 failover | 实时 |
+| 🚆 港铁班次 | 东铁线罗湖/落马洲等 12 站实时到站，data.gov.hk 开放 API | 每 10 秒 |
+| 🚌 口岸客流 | 香港入境处每日客流 CSV 解析，三级拥堵分级 | 每日 |
+
+### RAG 知识库
+
+ChromaDB + sentence-transformers 向量检索，覆盖 9 篇语料：
+
+| 类别 | 文档 | 内容 |
+|------|------|------|
+| 🏦 金融 | `bank-guide.md` | 汇丰/渣打/中银/ZA Bank 等 6 家银行开户指南 |
+| 🛃 海关 | `customs-clearance.md` | 红绿通道、免税额度、货币申报(≥12万HKD)、禁运品 |
+| 🚇 交通 | `transport-guide.md`、`mtr-fare.md` | 跨境巴士/港铁/高铁全攻略 + 票价 |
+| 🚧 通关 | `border-policy.md` | 8 大口岸开放时间、签注类型、一地两检 |
+| 🏫 出行 | `hkust-guide.md`、`hk-tourism.md` | 香港科大 3 条路线 + 20+ 景点 + 半日游推荐 |
+| 💰 消费 | `spending-guide.md` | 支付方式对比、餐饮/交通消费参考 |
+
+### 安全护栏
+
+- **规则层**：敏感词过滤（绕过外汇、套现、洗钱、违规开户等）
+- **AI 层**：LLM 合规审核，输出 `pass` / `review` + 理由
 
 ---
 
 ## 快速开始
 
-### 前置条件
+### 环境要求
 
 - Python ≥ 3.10
-- （可选）[Ollama](https://ollama.com) —— 用于无 API Key 时的本地 LLM 回退
+- （可选）[Ollama](https://ollama.com) — 无在线 API Key 时的本地 LLM 回退
 
-### 1. 克隆并安装依赖
+### 1. 安装依赖
 
 ```bash
 git clone <repo-url> && cd SZ-HK-Hub
 pip install -r requirements.txt
 ```
 
-### 2. （可选）初始化 Ollama 本地模型
-
-```bash
-# 安装 Ollama: https://ollama.com/download
-ollama pull qwen2.5:1.5b    # 986 MB，默认模型
-# 或使用更大模型: ollama pull qwen2.5:7b
-```
-
-### 3. 配置环境变量（可选）
+### 2. 配置 LLM
 
 ```bash
 cp .env.example .env
-# 编辑 .env：不配任何在线 Key 也能启动核心文本能力（自动 fallback 到本地 Ollama）
+# 编辑 .env，填入 API Key（至少配置 OPENAI_API_KEY）
 ```
 
-### 4. 构建 RAG 知识库（可选）
-
-```bash
-# 首次使用需构建向量索引（rag_corpus/ 已内置 6 份语料）
-python rag_ingest.py --reset
-```
-
-### 5. 启动 MCP 工具服务
-
-```bash
-# 终端 1：启动 MCP 服务（口岸/港铁/路线规划/文件操作）
-python mcp_server.py
-```
-
-### 6. 启动应用
-
-```bash
-# 终端 2：启动 Web UI
-python app.py
-```
-
-浏览器打开 `http://127.0.0.1:7860` 即可体验。
-
----
-
-## 功能概览
-
-| 模块 | 说明 | 演示模式 |
-|------|------|----------|
-| **Planner + Verifier** (LangGraph) | 多 Agent 拆解跨境需求 → 规划步骤 → 合规校验 | 使用 Ollama 本地模型 |
-| **活动/情报解析** (Vision) | 文本 / 截图解析日程并检测冲突 | 文本解析可用；截图需 API Key |
-| **实时决策支持** (MCP) | 汇率、口岸人流、港铁班次 → 推荐路线 | 汇率使用免费 API；口岸/港铁需 MCP |
-| **RAG 知识检索** (Vector DB) | 政策/开户指南语义检索 | 需有网环境运行 `rag_ingest.py` |
-| **安全护栏检测** | 敏感词过滤 + LLM 合规复核 | 已集成 |
-
-### Planner（需求 → 规划 → 校验）工作流
-
-```
-用户输入 → [Route] 路由意图 → [Execute] 检索 RAG + 调用工具
-         → [Plan] 生成步骤 → [Verify] 合规校验 → 输出结果
-```
-
-## 实现状态总览
-
-以下表格按当前仓库代码的实际实现情况整理，区分已实现、部分实现和未完善项。
-
-| 功能 | 当前状态 | 实际实现内容 | 备注 |
-|------|----------|--------------|------|
-| Gradio 主应用入口 | 已实现 | [app.py](app.py) 负责启动 Web UI，包含概览、规划、活动解析、实时决策、RAG 和安全护栏模块 | 当前正式入口是 `python app.py` |
-| Planner + Verifier | 已实现 | [planner_agent.py](planner_agent.py) 使用 LangGraph 组织 route -> execute -> plan -> verify 流程 | LLM 不可用时会降级为简化规划 |
-| LLM 多供应商回退 | 已实现 | [llm_client.py](llm_client.py) 支持 OpenAI、Anthropic，未配置在线 Key 时回退到 Ollama | Ollama 仅覆盖文本推理，不覆盖视觉 |
-| 文本活动解析与冲突检测 | 已实现 | [app.py](app.py) 中用正则解析日期/时间并检测同一时刻的重复事件 | 适合文本输入，规则较简单 |
-| 截图/海报视觉解析 | 已实现 | [vision_client.py](vision_client.py) 支持 OpenAI / Anthropic Vision 从图片中抽取活动信息 | 已接入阿里云百炼 qwen-vl-plus 多模态模型 |
-| 实时决策支持 | 已实现 | [mcp_client.py](mcp_client.py) 提供汇率、口岸人流、港铁班次读取；[app.py](app.py) 用这些数据给出推荐路线 | 汇率走公开 API；口岸/港铁由 [mcp_server.py](mcp_server.py) 提供；路线规划支持 Google Maps 真实 API |
-| RAG 知识检索 | 已实现 | [rag_store.py](rag_store.py) 支持 ChromaDB 持久化检索 + 混合搜索（关键词+语义）+ LLM 总结生成 | 已内置 6 份深港跨境语料，支持 hf-mirror 国内镜像下载 embedding 模型 |
-| 安全护栏检测 | 已实现 | [planner_agent.py](planner_agent.py) 和 [app.py](app.py) 都有敏感词过滤与人工复核提示 | 目前主要是规则 + LLM 复核，未做更细粒度策略引擎 |
-| RAG 语料构建脚本 | 已实现 | [rag_ingest.py](rag_ingest.py) 可将 `rag_corpus/` 下的 `.md` / `.txt` 写入向量库 | 需要用户自行补充语料 |
-| 交互式静态前端 | 未接入主流程 | [index.html](index.html)、[styles.css](styles.css)、[app.js](app.js) 提供了一套独立演示页 | 这套页面没有接入 [app.py](app.py)，当前不是正式运行入口 |
-| 自定义 MCP Server 能力 | 已实现 | [mcp_server.py](mcp_server.py) 提供口岸排队、港铁班次、路线规划（可接入 Google Maps）、本地文件读写四个工具 | 路线规划当前使用内置模拟数据，配置 `GOOGLE_MAPS_API_KEY` 后可切换真实 API |
-| 测试与评估体系 | 已实现 | 74 个 pytest 用例覆盖 9 个模块（应用层、MCP、RAG、LLM、Planner、Vision 等）；[tests/evaluation/](tests/evaluation/) 含 10 个评测用例 + 4 维评分 rubric | 全量通过，CI 就绪 |
-| 预置知识库内容 | 已实现 | `rag_corpus/` 内置 6 份深港跨境语料：开户指南、港铁票价、通关政策、交通攻略、消费指南、旅游信息 | 运行 `python rag_ingest.py --reset` 构建索引即可使用 |
-
----
-
-## 配置说明
-
-所有配置通过环境变量（`.env` 文件）管理，详见 [`.env.example`](.env.example)。
-
-### LLM 提供商优先级
+支持的 LLM 提供商（自动优先级探测）：
 
 | 优先级 | 提供商 | 触发条件 |
 |--------|--------|----------|
-| 1 | **OpenAI** | 设置了 `OPENAI_API_KEY` |
-| 2 | **Anthropic** | 设置了 `ANTHROPIC_API_KEY`（且无 OpenAI Key） |
-| 3 | **Ollama（回退）** | 以上均未设置，但本地 Ollama 服务可达 |
+| 1 | DeepSeek / OpenAI 兼容 | `OPENAI_API_KEY` + `OPENAI_BASE_URL` |
+| 2 | Anthropic | `ANTHROPIC_API_KEY` |
+| 3 | Ollama 本地 | 以上均未配置 + 本地 Ollama 可达 |
 
-> 无需任何在线 API Key——安装 Ollama 并拉取一个模型即可体验核心文本规划能力；视觉识别和部分实时数据仍需对应外部服务。
-
-### 关键环境变量
-
-| 变量 | 默认值 | 说明 |
-|------|--------|------|
-| `OPENAI_API_KEY` | — | OpenAI API Key |
-| `ANTHROPIC_API_KEY` | — | Anthropic API Key |
-| `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama 服务地址 |
-| `OLLAMA_MODEL` | `qwen2.5:1.5b` | Ollama 模型名称 |
-| `MCP_BASE_URL` | — | MCP Server 地址（可选） |
-| `EXCHANGE_RATE_API_URL` | `https://open.er-api.com/v6/latest/HKD` | 汇率 API |
-| `RAG_CORPUS_PATH` | `./rag_corpus` | 知识库原始文档目录 |
-| `EMBEDDING_MODEL` | `sentence-transformers/all-MiniLM-L6-v2` | 向量化模型 |
-
----
-
-## Ollama 本地回退
-
-当未配置 `OPENAI_API_KEY` 和 `ANTHROPIC_API_KEY` 时，系统自动探测本地 Ollama 服务：
-
-```
-LLMClient._resolve_provider()
-  ├─ openai?      → 有 OPENAI_API_KEY
-  ├─ anthropic?   → 有 ANTHROPIC_API_KEY
-  └─ ollama?      → 探测 localhost:11434 是否可达
-```
-
-### 支持的模型
-
-| 模型 | 大小 | 推荐场景 |
-|------|------|----------|
-| `qwen2.5:1.5b` | 986 MB | **默认**，轻量快速 |
-| `qwen2.5:7b` | 4.7 GB | 更优规划质量 |
-| `deepseek-r1:1.5b` | 1.1 GB | 推理增强 |
-
-切换模型：`export OLLAMA_MODEL=qwen2.5:7b`
-
----
-
-## RAG 知识库
-
-### 准备资料
-
-将政策文件、开户指南等 `.md`/`.txt` 文件放入 `rag_corpus/`：
-
-```
-rag_corpus/
-├── za-bank-guide.md
-├── mtr-timetable.md
-└── cross-border-policy.txt
-```
-
-### 构建向量库
+### 3. 构建知识库
 
 ```bash
 python rag_ingest.py --reset
 ```
 
-> 首次运行会从 HuggingFace 下载 embedding 模型（需联网）。
-> 构建完成后向量库存储在 `rag_db/` 目录。
+> 首次运行自动从 HuggingFace 镜像下载 embedding 模型（约 90 MB），约 30 秒。
 
-### 检索示例
+### 4. 启动
 
-在应用界面的 **RAG 知识检索** 面板输入关键词即可查询。
-
----
-
-## MCP 工具约定
-
-MCP Server 需提供以下工具（可通过 REST 网关转发）：
-
-| 工具 | 输入 | 输出 |
-|------|------|------|
-| `port_traffic` | `{"port": "深圳湾"}` | `{"result": {"port": "...", "queue_minutes": 18}}` |
-| `mtr_schedule` | `{"station": "西九龙"}` | `{"result": {"station": "...", "interval_minutes": 6}}` |
-| `route_planner` | `{"origin": "福田", "destination": "西九龙"}` | `{"result": {"routes": [{"mode": "...", "duration_min": 50, "cost_hkd": 40}]}}` |
-| `file_ops` | `{"action": "save\|load\|list", "filename": "...", "data": {...}}` | `{"result": {"status": "ok", "data": {...}}}` |
-| `exchange_rate` | 可选，默认使用 `open.er-api.com` | |
-
-工具名称可通过 `.env` 中的 `MCP_PORT_TOOL`、`MCP_MTR_TOOL`、`MCP_EXCHANGE_TOOL` 自定义。
-
----
-
-## 项目结构
-
+```bash
+python app.py
 ```
-SZ-HK-Hub/
-├── app.py              # Gradio 应用入口
-├── config.py           # 环境配置（dataclass）
-├── llm_client.py       # LLM 客户端（OpenAI / Anthropic / Ollama）
-├── planner_agent.py    # LangGraph 多 Agent 规划器
-├── mcp_client.py       # MCP 工具调用客户端
-├── rag_store.py        # ChromaDB 向量存储与检索
-├── rag_ingest.py       # 文档摄入脚本
-├── vision_client.py    # 多模态（截图解析）
-├── errors.py           # 自定义异常
-├── requirements.txt    # Python 依赖
-├── .env.example        # 环境变量模板
-├── README.md           # 本文档
-├── rag_corpus/         # RAG 原始文档目录（用户添加）
-└── rag_db/             # 向量库目录（自动生成）
-```
+
+浏览器打开 `http://127.0.0.1:7860`。
+
+> 无需单独启动 MCP Server。口岸客流、汇率、港铁班次均已内置为直连 API，`MCP_BASE_URL` 仅在需要自定义 MCP 后端时配置。
 
 ---
 
@@ -236,29 +116,169 @@ SZ-HK-Hub/
 
 | 组件 | 选型 |
 |------|------|
-| Web 框架 | Gradio |
-| AI Agent | LangGraph (StateGraph) |
-| 向量检索 | ChromaDB + sentence-transformers |
-| LLM 提供商 | OpenAI / Anthropic / Ollama（回退） |
+| Web UI | Gradio (Soft 主题) |
+| AI Agent | LangGraph — StateGraph 多节点编排 |
+| LLM | DeepSeek V4 Pro / OpenAI / Anthropic / Ollama 回退 |
+| 向量检索 | ChromaDB + `sentence-transformers/all-MiniLM-L6-v2` |
+| 实时数据 | data.gov.hk 开放 API + 入境处 CSV + open.er-api.com |
+| 多模态 | Vision-LLM（海报/截图日程提取） |
 | 工具协议 | MCP (Model Context Protocol) |
-| 多模态 | Vision-LLM（OpenAI / Anthropic） |
-| 部署 | 本地 Gradio Server |
+| 测试 | pytest + evaluation rubric |
 
-### 架构图
+### Agent 工作流
 
 ```
-┌──────────────┐     ┌─────────────────┐     ┌──────────────┐
-│  Gradio UI   │────▶│  Planner Agent  │────▶│  Verifier    │
-│  (app.py)    │     │  (LangGraph)    │     │  (Reflection)│
-└──────────────┘     └────────┬────────┘     └──────────────┘
-                              │
-                    ┌─────────┴─────────┐
-                    │                   │
-              ┌─────▼─────┐     ┌──────▼──────┐
-              │  RAG      │     │  MCP Tools  │
-              │  ChromaDB │     │  汇率/口岸  │
-              └───────────┘     └─────────────┘
+                    ┌─────────────┐
+                    │  user_query │
+                    └──────┬──────┘
+                           ▼
+               ┌───────────────────────┐
+               │  Node 1: route_intent │
+               │  意图分析 + 工具路由   │
+               └───────────┬───────────┘
+                           ▼
+               ┌───────────────────────┐
+               │  Node 2: execute      │
+               │  RAG 检索 + MCP 调用   │
+               │  + Vision 日程解析     │
+               └───────────┬───────────┘
+                           ▼
+               ┌───────────────────────┐
+               │  Node 3: generate     │
+               │  LLM 生成分步计划      │
+               └───────────┬───────────┘
+                           ▼
+               ┌───────────────────────┐
+               │  Node 4: verify       │
+               │  合规 + 敏感词审核     │
+               └───────────┬───────────┘
+                           ▼
+                    ┌─────────────┐
+                    │  输出结果    │
+                    └─────────────┘
 ```
+
+---
+
+## 项目结构
+
+```
+SZ-HK-Hub/
+├── app.py              # Gradio Web UI 入口
+├── config.py           # 环境配置（dataclass）
+├── llm_client.py       # LLM 客户端（OpenAI/Anthropic/Ollama 三供应商）
+├── planner_agent.py    # LangGraph Agent — 路由→执行→规划→校验
+├── mcp_client.py       # 实时数据客户端（汇率/口岸/港铁直连 API）
+├── mcp_server.py       # 自定义 MCP 工具服务（口岸/港铁/路线/文件）
+├── rag_store.py        # ChromaDB 向量存储与混合检索
+├── rag_ingest.py       # RAG 文档摄入脚本
+├── vision_client.py    # 多模态 Vision-LLM（截图日程提取）
+├── errors.py           # 自定义异常（ConfigError / ServiceError）
+├── requirements.txt    # Python 依赖
+├── pytest.ini          # 测试配置
+├── .env.example        # 环境变量模板
+├── rag_corpus/         # RAG 原始文档（9 篇 .md）
+│   ├── bank-guide.md
+│   ├── border-policy.md
+│   ├── customs-clearance.md
+│   ├── hk-tourism.md
+│   ├── hkust-guide.md
+│   ├── mtr-fare.md
+│   ├── spending-guide.md
+│   ├── transport-guide.md
+│   └── travel-info.md
+├── rag_db/             # 向量库存储（自动生成）
+├── user_data/          # 用户文件存储
+└── tests/              # 测试套件（74 用例）+ 评估模板
+    └── evaluation/
+        ├── cases_template.jsonl
+        ├── manual_judge_template.md
+        └── rubric_template.md
+```
+
+---
+
+## 配置说明
+
+关键环境变量（完整列表见 [`.env.example`](.env.example)）：
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `OPENAI_API_KEY` | — | LLM API Key（也支持 DeepSeek 等兼容 API） |
+| `OPENAI_BASE_URL` | `https://api.openai.com/v1` | API 端点 |
+| `OPENAI_MODEL` | `gpt-4o-mini` | 模型名称 |
+| `OLLAMA_BASE_URL` | `http://localhost:11434` | Ollama 服务地址 |
+| `OLLAMA_MODEL` | `qwen2.5:1.5b` | Ollama 模型名 |
+| `MTR_REALTIME_API_URL` | `https://rt.data.gov.hk/v1/transport/mtr/getSchedule.php` | 港铁实时 API |
+| `IMMIGRATION_CSV_URL` | `https://www.immd.gov.hk/opendata/...` | 入境处客流 CSV |
+| `EXCHANGE_RATE_API_URL` | `https://open.er-api.com/v6/latest/HKD` | 汇率主 API |
+| `EXCHANGE_RATE_API_URL_BACKUP` | `https://api.nxvav.cn/api/exchange-rate/` | 汇率备 API |
+| `REQUEST_TIMEOUT` | `60` | 请求超时（秒） |
+
+---
+
+## 改进路线图
+
+### ✅ 已完成
+
+- [x] LangGraph 多 Agent 规划流程（route → execute → plan → verify）
+- [x] LLM 多供应商回退（DeepSeek / OpenAI / Anthropic / Ollama）
+- [x] data.gov.hk 港铁实时到站 API（10 条线，每 10 秒更新）
+- [x] 香港入境处每日口岸客流解析
+- [x] 汇率双 API 自动 failover
+- [x] RAG 知识库 9 篇深港跨境语料
+- [x] Vision-LLM 海报/截图日程提取
+- [x] 敏感词 + LLM 双重安全护栏
+- [x] 74 个 pytest 测试用例全量通过
+
+### 🔴 P0 — 统一 Agent Pipeline（进行中）
+
+| 任务 | 说明 | 影响文件 |
+|------|------|----------|
+| 统一 Planner 入口 | 4 个独立 Tab → 1 个结构化表单 + 附件上传，AI 自动编排全部流程 | `app.py`、`planner_agent.py` |
+| Vision 集成到 Pipeline | 附件中的海报/截图由 Agent 自动调用 Vision 解析日程 | `planner_agent.py` |
+| Verifier Reflection 循环 | 规划 → LLM 自我审查 → 自动修正 → 最终输出（替代简单 pass/review） | `planner_agent.py` |
+
+### 🟡 P1 — 功能增强
+
+| 任务 | 说明 | 影响文件 |
+|------|------|----------|
+| Google Maps 路线规划 | 调用 Directions API，替换模拟路线数据 | `mcp_client.py`、`mcp_server.py` |
+| RAG 动态爬取 | 自动抓取香港政府/银行/港铁官网最新政策与 FAQ | 新增 `rag_crawler.py` |
+| 数字银行文档扩充 | 补充 Livi Bank、WeLab Bank、蚂蚁银行开户指南 | `rag_corpus/` |
+
+### 🟢 P2 — 工程优化
+
+| 任务 | 说明 | 影响文件 |
+|------|------|----------|
+| RAG 自动化评测 | 接入 Hit Rate / MRR 指标，CI 自动报告 | `tests/evaluation/` |
+| Multi-Agent 任务拆解 | Planner 显式分解复杂需求为逻辑子任务 | `planner_agent.py` |
+| 自动填单建议 | Vision 解析预约截图后给出填单提示 | `vision_client.py` |
+
+---
+
+## 开发指南
+
+### 运行测试
+
+```bash
+pytest tests/ -v
+```
+
+### RAG 评估
+
+评估用例定义在 `tests/evaluation/cases_template.jsonl`（10 条），评分 rubric 在 `tests/evaluation/rubric_template.md`（4 维度：准确性 / 完整性 / 安全性 / 可执行性）。
+
+### Ollama 本地方案
+
+无需任何在线 API Key 即可体验核心功能：
+
+```bash
+ollama pull qwen2.5:1.5b   # 986 MB
+python app.py               # 自动探测并回退到 Ollama
+```
+
+> 注意：小模型对复杂 Planner 提示词响应较慢，建议 `REQUEST_TIMEOUT=120`，或使用在线 API。
 
 ---
 

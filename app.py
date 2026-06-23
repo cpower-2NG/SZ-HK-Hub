@@ -48,8 +48,8 @@ config = AppConfig.from_env()
 llm_client = LLMClient(config)
 rag_store = RAGStore(config)
 mcp_client = MCPClient(config)
-planner_agent = PlannerAgent(rag_store, mcp_client, llm_client)
 vision_client = VisionClient(config)
+planner_agent = PlannerAgent(rag_store, mcp_client, llm_client, vision_client)
 
 
 def format_list(items: list[str], empty_message: str) -> str:
@@ -107,17 +107,50 @@ def detect_conflicts(events: list[dict[str, str]]) -> list[str]:
     return conflicts
 
 
-def handle_planner(text: str) -> tuple[str, str]:
-    text = text.strip()
-    if not text:
-        return "<em>请输入跨境需求描述。</em>", "⏳ 等待提交"
+def handle_planner(
+    purpose: str, destination: str, date_time: str, budget: str, extra: str, attachment: bytes | None
+) -> tuple[str, str, str]:
+    """统一 Pipeline：表单 + 附件 → Planner → 规划 + 日程 + 校验。"""
+    # 组装结构化 query
+    parts = []
+    label_map = {"出行目的": purpose, "目的地": destination, "日期时间": date_time, "预算": budget}
+    for label, val in label_map.items():
+        if val.strip():
+            parts.append(f"{label}：{val.strip()}")
+    if extra.strip():
+        parts.append(f"补充需求：{extra.strip()}")
+
+    query = "；".join(parts)
+    if not query:
+        return "<em>请至少填写一项需求。</em>", "", "⏳ 等待提交"
+
     try:
-        result = planner_agent.run(text)
+        result = planner_agent.run(
+            user_query=query,
+            raw_fields={"purpose": purpose, "dest": destination, "datetime": date_time, "budget": budget},
+            attachment=attachment,
+        )
     except ConfigError as exc:
-        return format_list([f"⚠️ 配置缺失：{exc}"], "暂无规划结果。"), "⚠️ 需要配置"
+        return format_list([f"⚠️ 配置缺失：{exc}"], ""), "", "⚠️ 需要配置"
     except ServiceError as exc:
-        return format_list([f"⚠️ 服务异常：{exc}"], "暂无规划结果。"), "⚠️ 需要人工复核"
-    return format_list(result.plan, "暂无规划结果。"), f"✅ {result.verification}"
+        return format_list([f"⚠️ 服务异常：{exc}"], ""), "", "⚠️ 需要人工复核"
+
+    # 组装规划 HTML
+    plan_html = format_list(result.plan, "暂无规划结果。")
+
+    # 日程信息
+    schedule_html = ""
+    if result.schedule_events:
+        lines = "\n".join(
+            f"<div class='plan-step'>📅 {e.get('date','?')} {e.get('time','?')} · {e.get('title','?')}</div>"
+            for e in result.schedule_events
+        )
+        schedule_html = f"<div style='margin-top:0.5rem;'><strong>📋 解析日程：</strong>{lines}</div>"
+    if result.schedule_conflicts:
+        conflicts = "\n".join(f"<div class='plan-step' style='border-left-color:#d97706;background:#fffbeb;'>⚠️ {c}</div>" for c in result.schedule_conflicts)
+        schedule_html += f"<div style='margin-top:0.5rem;'><strong>⚠️ 日程冲突：</strong>{conflicts}</div>"
+
+    return plan_html, schedule_html, f"{result.verification}"
 
 
 def handle_events(text: str, file_data: bytes | None) -> tuple[str, str]:
@@ -263,73 +296,77 @@ with gr.Blocks(title="SZ-HK Hub · 深港跨境生活助手", css=CSS, theme=gr.
         lw_disp = gr.HTML(f"<div class='metric-card'><div class='label'>🚆 罗湖口岸</div><div class='value'>{m['lo_wu']}</div></div>")
         lmc_disp = gr.HTML(f"<div class='metric-card'><div class='label'>🚆 落马洲口岸</div><div class='value'>{m['lMc']}</div></div>")
         mtr_disp = gr.HTML(f"<div class='metric-card info'><div class='label'>🚇 东铁线班次</div><div class='value'>{m['mtr']}</div></div>")
-
     refresh_btn = gr.Button("🔄 刷新实时数据", variant="secondary", size="sm")
 
-    # ── Tab 主体 ──
-    with gr.Tabs():
-        # Tab 1: 智能规划
-        with gr.Tab("🧠 智能规划"):
-            with gr.Row():
-                with gr.Column(scale=3, elem_classes="input-col"):
-                    planner_input = gr.Textbox(
-                        label="描述你的跨境需求",
-                        placeholder="例如：下周六去香港科大打比赛，2点到6点，顺便旅游，晚上回来",
-                        lines=4,
-                    )
-                with gr.Column(scale=1, elem_classes="action-col"):
-                    planner_button = gr.Button("🚀 生成规划", variant="primary", size="lg")
-                    verify_status = gr.Textbox(label="校验", value="—", interactive=False, show_label=True)
-            planner_output = gr.HTML("<em style='color:#6b7280;'>输入需求后点击「生成规划」，AI 将结合实时数据为你定制详细方案。</em>")
-            planner_button.click(
-                fn=handle_planner,
-                inputs=planner_input,
-                outputs=[planner_output, verify_status],
-            )
+    # ═══════════════════════════════════════════
+    # 统一表单区
+    # ═══════════════════════════════════════════
+    gr.Markdown("## 📝 出行需求")
 
-        # Tab 2: 知识检索
-        with gr.Tab("📚 知识检索"):
-            with gr.Row():
+    with gr.Row():
+        purpose = gr.Dropdown(
+            choices=["比赛", "旅游", "开户", "购物", "探亲", "商务", "看演出", "其他"],
+            label="出行目的", value=None, allow_custom_value=True, scale=1,
+        )
+        destination = gr.Textbox(
+            label="目的地", placeholder="港科大 / 中环 / 尖沙咀…", scale=1,
+        )
+    with gr.Row():
+        date_time = gr.Textbox(
+            label="日期 & 时间", placeholder="下周六 14:00-18:00", scale=1,
+        )
+        budget = gr.Textbox(
+            label="预算（可选）", placeholder="HK$500", scale=1,
+        )
+    extra = gr.Textbox(
+        label="补充需求（自由描述）",
+        placeholder="例如：顺便去西贡吃海鲜，晚上看维港夜景，需要当天往返…",
+        lines=3,
+    )
+    attachment = gr.File(label="📎 上传海报/截图（可选）", file_count="single", type="binary")
+
+    with gr.Row():
+        planner_button = gr.Button("🚀 一键生成规划", variant="primary", size="lg", scale=2)
+        verify_status = gr.Textbox(label="🛡️ 合规状态", value="—", interactive=False, scale=1)
+
+    # ═══════════════════════════════════════════
+    # 输出区
+    # ═══════════════════════════════════════════
+    gr.Markdown("---")
+    with gr.Row():
+        with gr.Column(scale=3):
+            gr.Markdown("### 📋 规划方案")
+            planner_output = gr.HTML("<em style='color:#6b7280;'>填写需求后点击「一键生成规划」。</em>")
+        with gr.Column(scale=2):
+            gr.Markdown("### 📅 日程 & 冲突")
+            schedule_output = gr.HTML("<em style='color:#6b7280;'>如有上传海报，自动解析日程并检测冲突。</em>")
+
+    planner_button.click(
+        fn=handle_planner,
+        inputs=[purpose, destination, date_time, budget, extra, attachment],
+        outputs=[planner_output, schedule_output, verify_status],
+    )
+
+    # ═══════════════════════════════════════════
+    # 底部：RAG 快速检索 + 合规检测
+    # ═══════════════════════════════════════════
+    with gr.Accordion("🔍 高级工具：知识检索 & 合规检测", open=False):
+        with gr.Row():
+            with gr.Column(scale=3):
                 rag_query = gr.Textbox(
-                    label="搜索政策、开户、旅游、交通信息",
-                    placeholder="例如：ZA Bank 开户材料 | 香港科大怎么去 | 免税额度",
-                    scale=4,
+                    label="搜索政策/开户/旅游信息",
+                    placeholder="例如：ZA Bank 开户材料 | 免税额度 | 香港科大怎么去",
                 )
-                rag_button = gr.Button("🔍 检索", variant="primary", scale=1)
-            rag_results = gr.HTML("<em style='color:#6b7280;'>输入关键词检索知识库。</em>")
-            rag_button.click(fn=search_rag, inputs=rag_query, outputs=rag_results)
-
-        # Tab 3: 日程解析
-        with gr.Tab("📅 日程解析"):
-            with gr.Row():
-                with gr.Column(scale=3):
-                    event_input = gr.Textbox(
-                        label="粘贴活动文案",
-                        placeholder="例如：6月28日 14:00 港科大篮球赛\n6月28日 18:00 尖沙咀晚餐",
-                        lines=4,
-                    )
-                with gr.Column(scale=1):
-                    event_file = gr.File(label="或上传截图", file_count="single", type="binary")
-                    event_file_note = gr.Markdown("📷 未选择截图")
-                    event_file.change(fn=describe_event_file, inputs=event_file, outputs=event_file_note)
-            event_button = gr.Button("📋 解析日程", variant="primary")
-            event_output = gr.HTML("<em style='color:#6b7280;'>待解析。</em>")
-            event_conflict = gr.Textbox(value="✅ 未检测到冲突。", interactive=False)
-            event_button.click(
-                fn=handle_events,
-                inputs=[event_input, event_file],
-                outputs=[event_output, event_conflict],
-            )
-
-        # Tab 4: 合规检测
-        with gr.Tab("🛡️ 合规检测"):
-            safety_input = gr.Textbox(
-                label="输入需检测的内容",
-                placeholder="例如：如何绕过外汇限制？",
-                lines=2,
-            )
-            safety_output = gr.Textbox(value="🔍 系统将自动标记敏感金融/法律问题。", interactive=False)
-            safety_input.input(fn=update_safety, inputs=safety_input, outputs=safety_output)
+                rag_button = gr.Button("🔍 检索", variant="secondary", size="sm")
+                rag_results = gr.HTML("<em style='color:#6b7280;'>输入关键词检索知识库。</em>")
+                rag_button.click(fn=search_rag, inputs=rag_query, outputs=rag_results)
+            with gr.Column(scale=1):
+                safety_input = gr.Textbox(
+                    label="合规检测",
+                    placeholder="输入需检测的内容…",
+                )
+                safety_output = gr.Textbox(value="🔍 自动标记敏感问题。", interactive=False)
+                safety_input.input(fn=update_safety, inputs=safety_input, outputs=safety_output)
 
     # ── 刷新回调 ──
     def refresh_all():
