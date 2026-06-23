@@ -28,6 +28,9 @@ class AppConfig:
     mcp_base_url: str | None
     mcp_api_key: str | None
     exchange_rate_api_url: str
+    exchange_rate_api_url_backup: str
+    mtr_realtime_api_url: str
+    immigration_csv_url: str
     mcp_port_tool: str
     mcp_mtr_tool: str
     mcp_exchange_tool: str
@@ -56,6 +59,17 @@ class AppConfig:
             mcp_api_key=os.getenv("MCP_API_KEY"),
             exchange_rate_api_url=os.getenv(
                 "EXCHANGE_RATE_API_URL", "https://open.er-api.com/v6/latest/HKD"
+            ),
+            exchange_rate_api_url_backup=os.getenv(
+                "EXCHANGE_RATE_API_URL_BACKUP", "https://api.nxvav.cn/api/exchange-rate/"
+            ),
+            mtr_realtime_api_url=os.getenv(
+                "MTR_REALTIME_API_URL",
+                "https://rt.data.gov.hk/v1/transport/mtr/getSchedule.php",
+            ),
+            immigration_csv_url=os.getenv(
+                "IMMIGRATION_CSV_URL",
+                "https://www.immd.gov.hk/opendata/eng/transport/immigration_clearance/statistics_on_daily_passenger_traffic.csv",
             ),
             mcp_port_tool=os.getenv("MCP_PORT_TOOL", "port_traffic"),
             mcp_mtr_tool=os.getenv("MCP_MTR_TOOL", "mtr_schedule"),

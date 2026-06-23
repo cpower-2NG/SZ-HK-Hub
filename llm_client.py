@@ -65,7 +65,7 @@ class LLMClient:
                 {"role": "user", "content": user_prompt},
             ],
             "temperature": 0.2,
-            "max_tokens": 800,
+            "max_tokens": 4096,
         }
         if json_mode:
             payload["response_format"] = {"type": "json_object"}
@@ -90,7 +90,7 @@ class LLMClient:
         }
         payload = {
             "model": self.config.anthropic_model,
-            "max_tokens": 800,
+            "max_tokens": 4096,
             "temperature": 0.2,
             "system": system_prompt,
             "messages": [{"role": "user", "content": user_prompt}],
@@ -122,7 +122,7 @@ class LLMClient:
                 {"role": "user", "content": user_prompt},
             ],
             "temperature": 0.2,
-            "max_tokens": 800,
+            "max_tokens": 4096,
             "stream": False,
         }
         try:
