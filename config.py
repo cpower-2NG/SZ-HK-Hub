@@ -67,5 +67,5 @@ class AppConfig:
             rag_corpus_path=str(Path(os.getenv("RAG_CORPUS_PATH", "./rag_corpus")).resolve()),
             rag_db_path=str(Path(os.getenv("RAG_DB_PATH", "./rag_db")).resolve()),
             embedding_model=os.getenv("EMBEDDING_MODEL", "sentence-transformers/all-MiniLM-L6-v2"),
-            request_timeout=int(os.getenv("REQUEST_TIMEOUT", "15")),
+            request_timeout=int(os.getenv("REQUEST_TIMEOUT", "60")),
         )

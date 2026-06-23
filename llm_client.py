@@ -69,9 +69,14 @@ class LLMClient:
         }
         if json_mode:
             payload["response_format"] = {"type": "json_object"}
-        response = requests.post(
-            url, headers=headers, json=payload, timeout=self.config.request_timeout
-        )
+        try:
+            response = requests.post(
+                url, headers=headers, json=payload, timeout=self.config.request_timeout
+            )
+        except requests.exceptions.ConnectionError:
+            raise ServiceError(f"OpenAI 服务不可达：{url}")
+        except requests.exceptions.Timeout:
+            raise ServiceError(f"OpenAI 服务超时（{self.config.request_timeout}s）：{url}")
         if response.status_code >= 400:
             raise ServiceError(f"OpenAI 调用失败：{response.status_code} {response.text}")
         data = response.json()
@@ -90,9 +95,14 @@ class LLMClient:
             "system": system_prompt,
             "messages": [{"role": "user", "content": user_prompt}],
         }
-        response = requests.post(
-            url, headers=headers, json=payload, timeout=self.config.request_timeout
-        )
+        try:
+            response = requests.post(
+                url, headers=headers, json=payload, timeout=self.config.request_timeout
+            )
+        except requests.exceptions.ConnectionError:
+            raise ServiceError(f"Anthropic 服务不可达：{url}")
+        except requests.exceptions.Timeout:
+            raise ServiceError(f"Anthropic 服务超时（{self.config.request_timeout}s）：{url}")
         if response.status_code >= 400:
             raise ServiceError(f"Anthropic 调用失败：{response.status_code} {response.text}")
         data = response.json()
@@ -115,9 +125,14 @@ class LLMClient:
             "max_tokens": 800,
             "stream": False,
         }
-        response = requests.post(
-            url, json=payload, timeout=self.config.request_timeout
-        )
+        try:
+            response = requests.post(
+                url, json=payload, timeout=self.config.request_timeout
+            )
+        except requests.exceptions.ConnectionError:
+            raise ServiceError(f"Ollama 服务不可达：{url}")
+        except requests.exceptions.Timeout:
+            raise ServiceError(f"Ollama 服务超时（{self.config.request_timeout}s），可调大 REQUEST_TIMEOUT 环境变量")
         if response.status_code >= 400:
             raise ServiceError(f"Ollama 调用失败：{response.status_code} {response.text}")
         data = response.json()
