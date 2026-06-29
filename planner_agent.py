@@ -166,14 +166,17 @@ class PlannerAgent:
         try:
             system_prompt = (
                 "你是深港跨境任务拆解引擎。将用户复杂需求分解为 2-4 个独立子任务，"
-                "每个子任务对应一个明确的目标。输出 JSON。"
+                "每个子任务应是一个可用于搜索引擎检索的**具体查询**。输出 JSON。"
             )
             user_prompt = (
                 f"用户需求：{query}\n"
                 f"意图：{route.get('intent', 'general')}\n\n"
-                "将需求拆解为子任务，格式："
-                "{\"subtasks\":[\"子任务1（如：规划交通路线）\",\"子任务2（如：查询开户材料）\",\"子任务3（如：推荐旅游景点）\"]}\n"
-                "每个子任务应是简洁的一句话目标描述。"
+                "拆解要求：\n"
+                "- 每个子任务必须是可检索的关键词查询（如「香港科技大学交通路线」而非「规划交通」）\n"
+                "- 覆盖所有用户提到的需求维度（交通、开户、旅游、海关等）\n"
+                "- 格式：{\"subtasks\":[\"查询1\",\"查询2\",\"查询3\"]}\n"
+                "示例：\n"
+                "输入「去港科大打比赛顺便开户旅游」→ [\"香港科技大学交通路线\",\"香港虚拟银行开户材料\",\"香港半日游景点推荐\"]"
             )
             result = self.llm_client.chat_json(system_prompt, user_prompt)
             subtasks = result.get("subtasks", [query])
@@ -197,17 +200,24 @@ class PlannerAgent:
             except (ConfigError, ServiceError):
                 pass
 
-        # ── RAG 检索 ──
+        # ── RAG 检索（子任务驱动） ──
         rag_results: list[dict[str, Any]] = []
         if route.get("needs_rag"):
-            rag_results = [
-                {
-                    "document": result.document,
-                    "metadata": result.metadata,
-                    "distance": result.distance,
-                }
-                for result in self.rag_store.search(query)
-            ]
+            subtasks = route.get("subtasks", [query])
+            seen_sources: set[str] = set()
+            for sub in (subtasks if isinstance(subtasks, list) else [query]):
+                for result in self.rag_store.search(str(sub)):
+                    src = result.metadata.get("source", "") or ""
+                    if src not in seen_sources:
+                        seen_sources.add(src)
+                        rag_results.append({
+                            "document": result.document,
+                            "metadata": result.metadata,
+                            "distance": result.distance,
+                        })
+            # 按 distance 排序，取前 5 篇
+            rag_results.sort(key=lambda r: r.get("distance") or 999)
+            rag_results = rag_results[:5]
 
         # ── MCP 工具调用 ──
         tool_results: dict[str, Any] = {}
@@ -311,8 +321,8 @@ class PlannerAgent:
 
         # 组织知识库内容
         rag_context = "\n".join(
-            f"📚 {item['metadata'].get('title', '参考资料')}：{item['document'][:400]}"
-            for item in state.get("rag_results", [])[:3]
+            f"📚 {item['metadata'].get('title', '参考资料')}：{item['document'][:800]}"
+            for item in state.get("rag_results", [])[:5]
         )
 
         # 组织实时工具结果
@@ -346,13 +356,24 @@ class PlannerAgent:
             "3. 结合实时数据（汇率、排队时长、列车班次）给出最优建议\n"
             "4. 如果有多个选择，明确推荐最优方案并说明理由\n"
             "5. 步骤按时间线排列，覆盖出发前准备 → 过关 → 交通 → 活动 → 返程全流程\n"
-            "6. 如果有图片解析出的日程，必须在规划中考虑这些固定时间\n"
-            "7. 如有日程冲突，必须在对应步骤中标注避免\n"
-            "8. 输出 5-8 条步骤\n\n"
-            "输出 JSON：{\"tasks\":[\"步骤1...\",\"步骤2...\",\"步骤3...\"]}\n"
-            "每条任务格式示例：\n"
-            "\"【出发准备】确认港澳通行证及签注有效，兑换HK$500现金备用（当前汇率1HKD=...CNY）\"\n"
-            "\"【过关路线】8:00前抵达罗湖口岸（排队约15分钟），过关后乘东铁线至九龙塘...\"\n"
+            "6. 如果含开户需求，必须提醒携带港澳通行证+身份证+入境小票\n"
+            "7. 如果含购物/消费，必须结合当前汇率给出人民币参考价\n"
+            "8. 必须标注返程时口岸关闭时间和港铁末班车\n"
+            "9. 输出 5-8 条步骤\n\n"
+            "输出 JSON：{\"tasks\":[\"步骤1...\",\"步骤2...\",\"步骤3...\"]}\n\n"
+            "示例1（出行+比赛+旅游）：\n"
+            "\"【出发准备】确认港澳通行证及签注，下载MTR Mobile，兑换HK$500（1HKD=0.87CNY≈¥435），开通手机漫游\"\n"
+            "\"【过关路线】8:00前抵罗湖口岸（排队约15分）→东铁线至九龙塘（35分,HK$40）→观塘线至彩虹（10分）→11M小巴至科大（20分,HK$8），总约1.5h\"\n"
+            "\"【比赛】14:00-18:00参赛，赛后参观蘑菇观景台\"\n"
+            "\"【旅游】18:30乘91M至彩虹→港铁至尖沙咀，天星小轮($4)→太平山顶缆车($88往返)→庙街夜市($80-120)\"\n"
+            "\"【返程】21:30前离开尖沙咀→东铁线回罗湖(50分,末班23:00)，口岸24:00关闭，确保23:00前过关\"\n\n"
+            "示例2（开户）：\n"
+            "\"【开户准备】携带港澳通行证+内地身份证，过关时保留白色入境小票，下载ZA Bank App（最便捷虚拟银行，0存款0管理费）\"\n"
+            "\"【过关】福田口岸→落马洲站→东铁线至九龙塘，全程约40分(HK$40)，到港后打开ZA Bank App立即开始开户流程\"\n"
+            "\"【开户操作】身处香港境内时(GPS验证)，拍摄证件→人脸识别→填写信息（用途填跨境消费/投资理财）→即时开通，全程约15分钟\"\n\n"
+            "示例3（海关/购物）：\n"
+            "\"【海关注意】免税额度：1L烈酒(>30度)+19支香烟；携带现金≥HK$120,000必须红通道申报，违者最高罚HK$500,000+监禁2年\"\n"
+            "\"【购物预算】维港周边商场支持支付宝/微信（按实时汇率结算），茶餐厅备HK$200现金（部分仅收现金），八达通充值HK$100\"\n"
         )
         # 子任务拆解信息
         subtasks = state.get("routing", {}).get("subtasks", [])
@@ -406,17 +427,23 @@ class PlannerAgent:
         # Reflection 自审查：让 LLM 审视生成的规划
         plan_text = "\n".join(f"{i+1}. {step}" for i, step in enumerate(plan))
         system_prompt = (
-            "你是深港跨境规划的质量审核专家。请仔细审查以下规划方案，从合规性、"
-            "可执行性、完整性三个维度评估，只回答 JSON。"
+            "你是深港跨境规划的质量审核专家。请严格审查以下规划方案。只回答 JSON。\n\n"
+            "审查规则：\n"
+            "- 如果规划完全满足用户需求且无问题，status 为 pass\n"
+            "- 如果发现任何问题（合规风险、步骤缺失、信息不具体），status 为 review\n"
+            "- status 为 review 时，corrections 必须包含具体修改指令，不能为空"
         )
         user_prompt = (
             f"## 用户需求\n{query}\n\n"
             f"## 生成的规划\n{plan_text}\n\n"
-            "请评估：\n"
-            "1. 是否包含任何违规建议（绕过外汇、洗钱、违规开户等）？\n"
-            "2. 步骤是否具体可执行（有时间/地点/路线/费用）？\n"
-            "3. 是否遗漏关键步骤（证件准备、返程安排等）？\n\n"
-            "输出 JSON：{\"status\":\"pass\"|\"review\",\"reason\":\"简短理由\",\"corrections\":\"如有问题，用一句话说明需要修正的内容\"}"
+            "逐项检查：\n"
+            "1. 是否提及任何违规操作（绕过外汇、洗钱、违规开户等）？\n"
+            "2. 每个步骤是否有具体的时间/地点/路线/费用？\n"
+            "3. 是否覆盖出发前准备（证件/换汇/网络）？\n"
+            "4. 是否覆盖返程安排（口岸关闭时间/末班车）？\n"
+            "5. 日程（如有）是否全部纳入规划？\n"
+            "6. 多个可选方案时是否指明了推荐方案？\n\n"
+            "输出 JSON：{\"status\":\"pass\"|\"review\",\"reason\":\"如pass可为空，review必填\",\"corrections\":\"具体修改指令，review时必填\"}"
         )
 
         try:
@@ -428,14 +455,22 @@ class PlannerAgent:
         reason = verdict.get("reason", "")
         corrections = verdict.get("corrections", "")
 
-        if status == "review" and reflection_count < MAX_REFLECTION_ROUNDS:
+        # 修复：review 但无 corrections 时，用 reason 作为修正指令
+        if status == "review" and not corrections and reason:
+            corrections = f"请修正以下问题：{reason}"
+
+        if status == "review" and corrections and reflection_count < MAX_REFLECTION_ROUNDS:
             return {
                 "verification_status": f"修正中（第{reflection_count + 1}轮）：{reason}",
                 "correction_notes": corrections,
                 "reflection_count": reflection_count + 1,
             }
 
-        return {"verification_status": f"✅ 已通过" if status == "pass" else f"⚠️ 需要人工复核：{reason}"}
+        if status == "review":
+            # 已达最大轮次或无有效修正指令 → 标记人工复核
+            return {"verification_status": f"⚠️ 需要人工复核：{reason or '审核未通过'}"}
+
+        return {"verification_status": "✅ 已通过"}
 
     def _should_reflect(self, state: AgentState) -> str:
         """决定是否需要 Reflection 修正循环。"""
