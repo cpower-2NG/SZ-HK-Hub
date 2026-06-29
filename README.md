@@ -25,13 +25,14 @@
 
 ### 智能跨境规划
 
-用户输入出行需求后，LangGraph Agent 自动编排全流程：
+用户填写结构化表单（出行目的/目的地/时间/预算）并可选上传海报截图，LangGraph Agent 自动编排全流程：
 
 ```
-结构化表单 + 附件上传 → 意图路由 → RAG 检索 + MCP 工具调用 → 规划生成 → 合规校验 → 结果输出
+结构化表单 + 📎附件 → route(意图路由) → decompose(拆解子任务)
+    → execute(RAG检索+MCP实时工具+Vision日程解析)
+    → generate(LLM生成分步计划) → verify(Reflection自审查→自动修正,最多2轮)
+    → 输出(规划+日程+冲突提醒+合规校验)
 ```
-
-每一步均由 LLM（支持 OpenAI / Anthropic / 本地 Ollama 回退）驱动决策。
 
 ### 实时决策支持
 
@@ -43,11 +44,11 @@
 
 ### RAG 知识库
 
-ChromaDB + sentence-transformers 向量检索，覆盖 9 篇语料：
+ChromaDB + sentence-transformers 向量检索，覆盖 10 篇语料：
 
 | 类别 | 文档 | 内容 |
 |------|------|------|
-| 🏦 金融 | `bank-guide.md` | 汇丰/渣打/中银/ZA Bank 等 6 家银行开户指南 |
+| 🏦 金融 | `bank-guide.md`、`virtual-bank-guide.md` | 汇丰/渣打/中银/ZA Bank 等 6 家传统银行 + Livi/WeLab/Ant/Mox 4 家虚拟银行 |
 | 🛃 海关 | `customs-clearance.md` | 红绿通道、免税额度、货币申报(≥12万HKD)、禁运品 |
 | 🚇 交通 | `transport-guide.md`、`mtr-fare.md` | 跨境巴士/港铁/高铁全攻略 + 票价 |
 | 🚧 通关 | `border-policy.md` | 8 大口岸开放时间、签注类型、一地两检 |
@@ -57,7 +58,7 @@ ChromaDB + sentence-transformers 向量检索，覆盖 9 篇语料：
 ### 安全护栏
 
 - **规则层**：敏感词过滤（绕过外汇、套现、洗钱、违规开户等）
-- **AI 层**：LLM 合规审核，输出 `pass` / `review` + 理由
+- **AI 层**：LLM 合规审核 + **Reflection 自审查循环**（规划 → 自我审视 → 自动修正，最多 2 轮）
 
 ---
 
@@ -134,27 +135,35 @@ python app.py
                            ▼
                ┌───────────────────────┐
                │  Node 1: route_intent │
-               │  意图分析 + 工具路由   │
+               │  意图 + Vision 路由    │
                └───────────┬───────────┘
                            ▼
                ┌───────────────────────┐
-               │  Node 2: execute      │
-               │  RAG 检索 + MCP 调用   │
-               │  + Vision 日程解析     │
+               │  Node 2: decompose    │
+               │  复杂需求 → 子任务拆解  │
                └───────────┬───────────┘
                            ▼
                ┌───────────────────────┐
-               │  Node 3: generate     │
+               │  Node 3: execute      │
+               │  RAG + MCP + Vision    │
+               │  + 日程冲突检测         │
+               └───────────┬───────────┘
+                           ▼
+               ┌───────────────────────┐
+               │  Node 4: generate     │
                │  LLM 生成分步计划      │
                └───────────┬───────────┘
                            ▼
                ┌───────────────────────┐
-               │  Node 4: verify       │
-               │  合规 + 敏感词审核     │
+               │  Node 5: verify       │
+               │  Reflection 自审查     │
+               │  → 修正(最多2轮)       │
                └───────────┬───────────┘
                            ▼
                     ┌─────────────┐
-                    │  输出结果    │
+                    │  统一输出    │
+                    │ 规划+日程    │
+                    │ +冲突+校验   │
                     └─────────────┘
 ```
 
@@ -164,20 +173,21 @@ python app.py
 
 ```
 SZ-HK-Hub/
-├── app.py              # Gradio Web UI 入口
+├── app.py              # Gradio Web UI 入口（统一表单 + 实时数据仪表盘）
 ├── config.py           # 环境配置（dataclass）
 ├── llm_client.py       # LLM 客户端（OpenAI/Anthropic/Ollama 三供应商）
-├── planner_agent.py    # LangGraph Agent — 路由→执行→规划→校验
-├── mcp_client.py       # 实时数据客户端（汇率/口岸/港铁直连 API）
-├── mcp_server.py       # 自定义 MCP 工具服务（口岸/港铁/路线/文件）
+├── planner_agent.py    # LangGraph Agent — 5 节点：路由→拆解→执行→规划→校验(Reflection)
+├── mcp_client.py       # 实时数据客户端（汇率双API/口岸客流/港铁实时/Google Maps路线）
+├── mcp_server.py       # 自定义 MCP 工具服务（REST 网关，可选启用）
 ├── rag_store.py        # ChromaDB 向量存储与混合检索
 ├── rag_ingest.py       # RAG 文档摄入脚本
-├── vision_client.py    # 多模态 Vision-LLM（截图日程提取）
+├── rag_crawler.py      # RAG 动态爬虫（香港政府/银行/港铁官网抓取）
+├── vision_client.py    # 多模态 Vision-LLM（日程提取 + 表单填单建议）
 ├── errors.py           # 自定义异常（ConfigError / ServiceError）
 ├── requirements.txt    # Python 依赖
 ├── pytest.ini          # 测试配置
 ├── .env.example        # 环境变量模板
-├── rag_corpus/         # RAG 原始文档（9 篇 .md）
+├── rag_corpus/         # RAG 原始文档（10 篇 .md）
 │   ├── bank-guide.md
 │   ├── border-policy.md
 │   ├── customs-clearance.md
@@ -186,13 +196,15 @@ SZ-HK-Hub/
 │   ├── mtr-fare.md
 │   ├── spending-guide.md
 │   ├── transport-guide.md
-│   └── travel-info.md
+│   ├── travel-info.md
+│   └── virtual-bank-guide.md
 ├── rag_db/             # 向量库存储（自动生成）
 ├── user_data/          # 用户文件存储
-└── tests/              # 测试套件（74 用例）+ 评估模板
+└── tests/              # 测试套件（74 用例）+ 评估
     └── evaluation/
         ├── cases_template.jsonl
         ├── manual_judge_template.md
+        ├── rag_eval.py        # RAG 自动化评测（Hit Rate + MRR）
         └── rubric_template.md
 ```
 
@@ -221,39 +233,33 @@ SZ-HK-Hub/
 
 ### ✅ 已完成
 
-- [x] LangGraph 多 Agent 规划流程（route → execute → plan → verify）
+- [x] LangGraph 多 Agent 规划流程（5 节点：route → decompose → execute → plan → verify）
 - [x] LLM 多供应商回退（DeepSeek / OpenAI / Anthropic / Ollama）
 - [x] data.gov.hk 港铁实时到站 API（10 条线，每 10 秒更新）
-- [x] 香港入境处每日口岸客流解析
-- [x] 汇率双 API 自动 failover
-- [x] RAG 知识库 9 篇深港跨境语料
-- [x] Vision-LLM 海报/截图日程提取
+- [x] 香港入境处每日口岸客流解析（三级拥堵分级）
+- [x] 汇率双 API 自动 failover（open.er-api + nxvav.cn）
+- [x] RAG 知识库 10 篇深港跨境语料
+- [x] Vision-LLM 海报/截图日程提取 + 表单自动填单建议
 - [x] 敏感词 + LLM 双重安全护栏
+- [x] **统一 Agent Pipeline**：4 Tab → 1 结构化表单 + 附件，AI 自动编排
+- [x] **Vision 集成**：附件自动触发 Vision 解析 → 日程注入规划 → 冲突检测
+- [x] **Verifier Reflection 循环**：规划 → LLM 自审查 → 自动修正（最多 2 轮）
+- [x] **Google Maps 路线规划**：三级 fallback（Google Map API → MCP → 预设）
+- [x] **RAG 动态爬虫**：BeautifulSoup 框架，预设 3 个香港政府源
+- [x] **数字银行扩充**：Livi Bank / WeLab Bank / Ant Bank / Mox Bank
+- [x] **RAG 自动化评测**：Hit Rate 100% / MRR 0.875
+- [x] **Multi-Agent 任务拆解**：decompose 节点自动拆解复杂需求
 - [x] 74 个 pytest 测试用例全量通过
 
-### 🔴 P0 — 统一 Agent Pipeline（进行中）
+### 🔮 未来规划
 
-| 任务 | 说明 | 影响文件 |
-|------|------|----------|
-| 统一 Planner 入口 | 4 个独立 Tab → 1 个结构化表单 + 附件上传，AI 自动编排全部流程 | `app.py`、`planner_agent.py` |
-| Vision 集成到 Pipeline | 附件中的海报/截图由 Agent 自动调用 Vision 解析日程 | `planner_agent.py` |
-| Verifier Reflection 循环 | 规划 → LLM 自我审查 → 自动修正 → 最终输出（替代简单 pass/review） | `planner_agent.py` |
-
-### 🟡 P1 — 功能增强
-
-| 任务 | 说明 | 影响文件 |
-|------|------|----------|
-| Google Maps 路线规划 | 调用 Directions API，替换模拟路线数据 | `mcp_client.py`、`mcp_server.py` |
-| RAG 动态爬取 | 自动抓取香港政府/银行/港铁官网最新政策与 FAQ | 新增 `rag_crawler.py` |
-| 数字银行文档扩充 | 补充 Livi Bank、WeLab Bank、蚂蚁银行开户指南 | `rag_corpus/` |
-
-### 🟢 P2 — 工程优化
-
-| 任务 | 说明 | 影响文件 |
-|------|------|----------|
-| RAG 自动化评测 | 接入 Hit Rate / MRR 指标，CI 自动报告 | `tests/evaluation/` |
-| Multi-Agent 任务拆解 | Planner 显式分解复杂需求为逻辑子任务 | `planner_agent.py` |
-| 自动填单建议 | Vision 解析预约截图后给出填单提示 | `vision_client.py` |
+| 任务 | 说明 |
+|------|------|
+| 多语言支持 | 英文 / 繁体中文界面与输出 |
+| 用户历史记忆 | LangGraph Checkpointer 持久化对话上下文 |
+| 实时口岸摄像头 | 接入香港运输署 CCTV 快拍（已有 API 端点） |
+| 预算自动追踪 | 根据路线 + 消费参考自动计算全程预算 |
+| 移动端适配 | PWA 或微信小程序版本 |
 
 ---
 
@@ -267,7 +273,23 @@ pytest tests/ -v
 
 ### RAG 评估
 
+```bash
+# 自动化评测（Hit Rate + MRR）
+python tests/evaluation/rag_eval.py
+python tests/evaluation/rag_eval.py --top-k 5 --json  # JSON 输出
+```
+
 评估用例定义在 `tests/evaluation/cases_template.jsonl`（10 条），评分 rubric 在 `tests/evaluation/rubric_template.md`（4 维度：准确性 / 完整性 / 安全性 / 可执行性）。
+
+### RAG 动态更新
+
+```bash
+# 爬取预设香港政府源并自动重建向量库
+python rag_crawler.py --ingest
+
+# 爬取单个 URL
+python rag_crawler.py --url "https://example.com/policy" --output my-policy
+```
 
 ### Ollama 本地方案
 

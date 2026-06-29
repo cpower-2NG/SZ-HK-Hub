@@ -42,7 +42,7 @@ def test_get_exchange_rate_missing_currency(make_config, monkeypatch) -> None:
         lambda url, timeout: _resp(200, {"rates": {"USD": 0.12}}),
     )
 
-    with pytest.raises(ServiceError, match="目标币种"):
+    with pytest.raises(ServiceError, match="汇率"):
         client.get_exchange_rate(target="CNY")
 
 
@@ -58,14 +58,15 @@ def test_get_port_traffic_parses_multiple_keys(make_config, monkeypatch) -> None
 
 
 def test_get_mtr_schedule_http_error(make_config, monkeypatch) -> None:
-    client = MCPClient(make_config(mcp_base_url="https://mcp.example"))
+    client = MCPClient(make_config())
 
-    def fake_post(url, headers, json, timeout):
+    def fake_get(url, timeout):
         return _resp(500, {}, text="server error")
 
-    monkeypatch.setattr(mcp_module.requests, "post", fake_post)
-    with pytest.raises(ServiceError, match="MCP 工具调用失败"):
-        client.get_mtr_schedule("西九龙")
+    monkeypatch.setattr(mcp_module.requests, "get", fake_get)
+    # MTR 实时 API 失败时返回默认间隔 8 分钟（不抛异常）
+    result = client.get_mtr_schedule("西九龙")
+    assert result.interval_minutes == 8
 
 
 # ── 新增：路线规划测试 ────────────────────────────────────

@@ -59,12 +59,15 @@ class PlannerAgent:
     def _build_graph(self) -> CompiledGraph:
         graph = StateGraph(AgentState)
         graph.add_node("route", self._route_intent)
+        graph.add_node("decompose", self._decompose_tasks)
         graph.add_node("execute", self._execute_actions)
         graph.add_node("plan", self._generate_plan)
         graph.add_node("verify", self._verify)
 
         graph.set_entry_point("route")
-        graph.add_edge("route", "execute")
+        # route → decompose (拆解复杂任务) → execute → plan → verify
+        graph.add_edge("route", "decompose")
+        graph.add_edge("decompose", "execute")
         graph.add_edge("execute", "plan")
         graph.add_edge("plan", "verify")
 
@@ -150,6 +153,35 @@ class PlannerAgent:
         if has_attachment:
             route["needs_vision"] = True
         return {"routing": route}
+
+    def _decompose_tasks(self, state: AgentState) -> AgentState:
+        """将复杂需求拆解为逻辑子任务，便于后续 RAG 检索和工具调用更有针对性。"""
+        query = state.get("user_query", "")
+        route = state.get("routing", {})
+
+        # 简单需求跳过拆解
+        if not self.llm_client.is_configured or len(query) < 20:
+            return {"routing": route}
+
+        try:
+            system_prompt = (
+                "你是深港跨境任务拆解引擎。将用户复杂需求分解为 2-4 个独立子任务，"
+                "每个子任务对应一个明确的目标。输出 JSON。"
+            )
+            user_prompt = (
+                f"用户需求：{query}\n"
+                f"意图：{route.get('intent', 'general')}\n\n"
+                "将需求拆解为子任务，格式："
+                "{\"subtasks\":[\"子任务1（如：规划交通路线）\",\"子任务2（如：查询开户材料）\",\"子任务3（如：推荐旅游景点）\"]}\n"
+                "每个子任务应是简洁的一句话目标描述。"
+            )
+            result = self.llm_client.chat_json(system_prompt, user_prompt)
+            subtasks = result.get("subtasks", [query])
+            # 将子任务挂到 routing 中，generate_plan 阶段会用到
+            route["subtasks"] = subtasks if isinstance(subtasks, list) else [query]
+            return {"routing": route}
+        except ServiceError:
+            return {"routing": route}
 
     def _execute_actions(self, state: AgentState) -> AgentState:
         route = state.get("routing", {})
@@ -322,8 +354,16 @@ class PlannerAgent:
             "\"【出发准备】确认港澳通行证及签注有效，兑换HK$500现金备用（当前汇率1HKD=...CNY）\"\n"
             "\"【过关路线】8:00前抵达罗湖口岸（排队约15分钟），过关后乘东铁线至九龙塘...\"\n"
         )
+        # 子任务拆解信息
+        subtasks = state.get("routing", {}).get("subtasks", [])
+        subtask_text = ""
+        if subtasks:
+            subtask_text = "\n".join(f"- {s}" for s in subtasks)
+            subtask_text = f"## 任务拆解\n{subtask_text}\n请按子任务逐一覆盖。\n\n"
+
         user_prompt = (
             f"## 用户需求\n{query}\n\n"
+            f"{subtask_text}"
             f"## 日程信息（从海报/截图解析）\n{schedule_text or '（无外部日程）'}\n"
             f"## 日程冲突\n{conflict_text}\n\n"
             f"## 知识库参考\n{rag_context or '（无匹配知识库内容，请基于常识推荐）'}\n\n"

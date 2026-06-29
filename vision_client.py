@@ -19,6 +19,79 @@ class VisionClient:
             return self._parse_with_anthropic(file_data)
         return self._parse_with_openai(file_data)
 
+    def parse_form_fields(self, file_data: bytes) -> dict[str, Any]:
+        """从预约截图/表格图片中提取可填写的字段信息，给出填单建议。"""
+        if self.config.vision_provider == "anthropic":
+            return self._parse_form_with_anthropic(file_data)
+        return self._parse_form_with_openai(file_data)
+
+    def _parse_form_with_openai(self, file_data: bytes) -> dict[str, Any]:
+        """用 OpenAI 兼容 API 解析表格/截图中的字段。"""
+        if not self.config.openai_api_key:
+            raise ConfigError("未配置 OPENAI_API_KEY")
+        image_data, media_type = self._encode_image(file_data)
+        url = f"{self.config.openai_base_url.rstrip('/')}/chat/completions"
+        headers = {"Authorization": f"Bearer {self.config.openai_api_key}"}
+        prompt = (
+            "你是表单信息提取助手。请从图片中识别所有可填写的表格/预约字段，"
+            "并给出填单建议。输出 JSON。\n\n"
+            "格式：{\"form_title\":\"表单标题\",\"fields\":["
+            "{\"label\":\"字段名\",\"type\":\"text|select|date|upload\","
+            "\"required\":true/false,\"hint\":\"填单建议（中文）\"}]}"
+        )
+        payload = {
+            "model": self.config.openai_model,
+            "messages": [
+                {"role": "system", "content": "输出必须是 JSON。"},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": prompt},
+                        {"type": "image_url", "image_url": {"url": f"data:{media_type};base64,{image_data}"}},
+                    ],
+                },
+            ],
+            "temperature": 0.1,
+            "max_tokens": 800,
+            "response_format": {"type": "json_object"},
+        }
+        response = requests.post(url, headers=headers, json=payload, timeout=self.config.request_timeout)
+        if response.status_code >= 400:
+            raise ServiceError(f"视觉模型调用失败：{response.status_code} {response.text}")
+        data = response.json()
+        content = data["choices"][0]["message"]["content"]
+        return self._safe_json(content)
+
+    def _parse_form_with_anthropic(self, file_data: bytes) -> dict[str, Any]:
+        """用 Anthropic API 解析表单字段。"""
+        if not self.config.anthropic_api_key:
+            raise ConfigError("未配置 ANTHROPIC_API_KEY")
+        image_data, media_type = self._encode_image(file_data)
+        url = f"{self.config.anthropic_base_url.rstrip('/')}/v1/messages"
+        headers = {"x-api-key": self.config.anthropic_api_key, "anthropic-version": "2023-06-01"}
+        prompt = (
+            "请从图片中识别所有可填写的表格字段，输出 JSON："
+            "{\"form_title\":\"\",\"fields\":[{\"label\":\"\",\"type\":\"\",\"required\":false,\"hint\":\"\"}]}"
+        )
+        payload = {
+            "model": self.config.anthropic_model,
+            "max_tokens": 800,
+            "temperature": 0.1,
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image", "source": {"type": "base64", "media_type": media_type, "data": image_data}},
+                ],
+            }],
+        }
+        response = requests.post(url, headers=headers, json=payload, timeout=self.config.request_timeout)
+        if response.status_code >= 400:
+            raise ServiceError(f"视觉模型调用失败：{response.status_code} {response.text}")
+        data = response.json()
+        content = "".join(block.get("text", "") for block in data.get("content", []))
+        return self._safe_json(content)
+
     def _parse_with_openai(self, file_data: bytes) -> list[dict[str, str]]:
         if not self.config.openai_api_key:
             raise ConfigError("未配置 OPENAI_API_KEY")
