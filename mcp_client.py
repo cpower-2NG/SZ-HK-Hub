@@ -255,26 +255,114 @@ class MCPClient:
             return MTRSchedule(station=station, interval_minutes=8)
 
     def get_route(self, origin: str, destination: str) -> RoutePlan:
-        """跨境路线规划，支持 Google Maps（需配置 API Key）或内置模拟数据。"""
-        data = self.call_tool(
-            self.config.mcp_route_tool,
-            {"origin": origin, "destination": destination},
-        )
-        raw_routes = data.get("routes", [])
-        routes = [
-            RouteOption(
-                mode=r.get("mode", "未知"),
-                duration_min=int(r.get("duration_min", 0)),
-                cost_hkd=float(r.get("cost_hkd", 0)),
-                note=r.get("note", ""),
-            )
-            for r in raw_routes
-        ]
+        """跨境路线规划：优先 Google Maps，其次 MCP 服务，最后预设路线。"""
+        # 1) 尝试 Google Maps
+        if self.config.google_maps_api_key:
+            try:
+                routes = self._call_google_maps(origin, destination)
+                if routes:
+                    return RoutePlan(origin=origin, destination=destination, routes=routes, source="google_maps")
+            except Exception:
+                pass
+
+        # 2) 尝试 MCP 服务
+        if self.config.mcp_base_url:
+            try:
+                data = self.call_tool(self.config.mcp_route_tool, {"origin": origin, "destination": destination})
+                raw_routes = data.get("routes", [])
+                routes = [
+                    RouteOption(
+                        mode=r.get("mode", "未知"),
+                        duration_min=int(r.get("duration_min", 0)),
+                        cost_hkd=float(r.get("cost_hkd", 0)),
+                        note=r.get("note", ""),
+                    )
+                    for r in raw_routes
+                ]
+                if routes:
+                    return RoutePlan(
+                        origin=data.get("origin", origin),
+                        destination=data.get("destination", destination),
+                        routes=routes,
+                        source=data.get("source", "mcp"),
+                    )
+            except (ConfigError, ServiceError):
+                pass
+
+        # 3) 回退：预设路线
+        return self._preset_route(origin, destination)
+
+    def _call_google_maps(self, origin: str, destination: str) -> list[RouteOption]:
+        """调用 Google Maps Directions API。"""
+        url = "https://maps.googleapis.com/maps/api/directions/json"
+        params = {
+            "origin": origin,
+            "destination": destination,
+            "key": self.config.google_maps_api_key,
+            "mode": "transit",
+            "alternatives": "true",
+            "language": "zh-CN",
+        }
+        resp = requests.get(url, params=params, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+        if data.get("status") != "OK":
+            return []
+
+        routes: list[RouteOption] = []
+        for route in data.get("routes", [])[:2]:
+            legs = route.get("legs", [{}])
+            leg = legs[0] if legs else {}
+            duration_min = round(leg.get("duration", {}).get("value", 0) / 60)
+            distance_km = leg.get("distance", {}).get("value", 0) / 1000
+
+            steps = leg.get("steps", [])
+            modes: list[str] = []
+            for step in steps[:4]:
+                mode = step.get("travel_mode", "")
+                if mode == "TRANSIT":
+                    detail = step.get("transit_details", {})
+                    line = detail.get("line", {}).get("short_name", "")
+                    modes.append(line if line else "公交")
+                elif mode:
+                    modes.append({"WALKING": "步行", "DRIVING": "驾车"}.get(mode, mode))
+
+            mode_str = " → ".join(modes) if modes else "公交/地铁"
+            routes.append(RouteOption(
+                mode=mode_str,
+                duration_min=duration_min,
+                cost_hkd=round(distance_km * 1.5, 0),
+                note=f"Google Maps 实时路线，约 {distance_km:.1f} km",
+            ))
+
+        return routes
+
+    @staticmethod
+    def _preset_route(origin: str, destination: str) -> RoutePlan:
+        """内置深港预设路线库。"""
+        key = f"{origin}→{destination}"
+        presets: dict[str, list[RouteOption]] = {
+            "福田→西九龙": [
+                RouteOption("港铁东铁线→屯马线", 50, 40, "落马洲站出发"),
+                RouteOption("高铁", 14, 80, "福田站→西九龙站，最快"),
+            ],
+            "深圳湾→西九龙": [
+                RouteOption("巴士B2P→港铁屯马线", 55, 25, "天水围站转车"),
+            ],
+            "罗湖→尖沙咀": [
+                RouteOption("港铁东铁线直达", 42, 40, "罗湖站→尖东站"),
+            ],
+            "福田→中环": [
+                RouteOption("东铁线→金钟转港岛线", 65, 50, "落马洲站出发"),
+                RouteOption("高铁→港铁", 35, 90, "西九龙站换乘"),
+            ],
+        }
+        if key in presets:
+            return RoutePlan(origin=origin, destination=destination, routes=presets[key], source="preset")
         return RoutePlan(
-            origin=data.get("origin", origin),
-            destination=data.get("destination", destination),
-            routes=routes,
-            source=data.get("source", "mock"),
+            origin=origin, destination=destination,
+            routes=[RouteOption("港铁（推荐）", 55, 40, "请指定具体口岸以获取精确路线")],
+            source="preset",
         )
 
     def file_save(self, filename: str, data: dict) -> FileOpResult:

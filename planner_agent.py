@@ -13,7 +13,7 @@ from rag_store import RAGStore
 from vision_client import VisionClient
 
 SENSITIVE_TERMS = ["绕过外汇", "套现", "非法", "洗钱", "违规开户", "避税"]
-TOOL_ORDER = ["exchange_rate", "port_traffic", "mtr_schedule"]
+TOOL_ORDER = ["exchange_rate", "port_traffic", "mtr_schedule", "route_planner"]
 TOOL_CHOICES = set(TOOL_ORDER)
 MAX_REFLECTION_ROUNDS = 2
 
@@ -121,11 +121,12 @@ class PlannerAgent:
             "可用工具：\n"
             "- exchange_rate：实时汇率（HKD↔CNY等）\n"
             "- port_traffic：口岸排队时长与客流数据\n"
-            "- mtr_schedule：港铁实时到站信息（含东铁线罗湖/落马洲跨境站）\n\n"
+            "- mtr_schedule：港铁实时到站信息（含东铁线罗湖/落马洲跨境站）\n"
+            "- route_planner：跨境路线规划（含 Google Maps 实时路线）\n\n"
             "知识库包含：通关政策、口岸指南、交通攻略、海关规定、银行开户、旅游景点、目的地出行指南。\n\n"
             "判断规则：\n"
             "- 涉及过关/签证/通行证 → needs_rag=true\n"
-            "- 涉及交通/路线/口岸选择 → needs_rag=true, tool_calls 含 port_traffic+mtr_schedule\n"
+            "- 涉及交通/路线/口岸选择 → needs_rag=true, tool_calls 含 port_traffic+mtr_schedule+route_planner\n"
             "- 涉及消费/换汇/购物 → tool_calls 含 exchange_rate\n"
             "- 涉及旅游/景点 → needs_rag=true\n"
             "- 涉及海关/违禁品/免税 → needs_rag=true\n"
@@ -217,6 +218,24 @@ class PlannerAgent:
                             }
                         except Exception:
                             pass
+                elif tool == "route_planner":
+                    # 从用户需求中提取目的地用于路线规划
+                    dest = state.get("raw_fields", {}).get("dest", "西九龙")
+                    origin = "福田"  # 默认深圳出发
+                    try:
+                        route = self.mcp_client.get_route(origin, dest)
+                        route_lines = [
+                            f"{r.mode}：约{r.duration_min}分钟 HK${r.cost_hkd:.0f}"
+                            for r in route.routes[:2]
+                        ]
+                        tool_results["route_planner"] = {
+                            "origin": origin,
+                            "destination": dest,
+                            "source": route.source,
+                            "summary": f"{origin}→{dest}（{route.source}）：" + " | ".join(route_lines),
+                        }
+                    except (ConfigError, ServiceError):
+                        pass
             except (ConfigError, ServiceError) as exc:
                 tool_results[tool] = {"error": str(exc), "summary": f"获取失败：{exc}"}
 
