@@ -109,9 +109,9 @@ def detect_conflicts(events: list[dict[str, str]]) -> list[str]:
 
 def handle_planner(
     purpose: str, destination: str, date_time: str, budget: str, extra: str, attachment: bytes | None
-) -> tuple[str, str, str, str]:
-    """统一 Pipeline：表单 + 附件 → Planner → 规划 + 日程 + 校验 + 审核详情。"""
-    # 组装结构化 query
+) -> tuple[str, str, str]:
+    """统一 Pipeline：表单 + 附件 → Planner → 规划(含日程) + 审核结果 + 审核详情。"""
+
     parts = []
     label_map = {"出行目的": purpose, "目的地": destination, "日期时间": date_time, "预算": budget}
     for label, val in label_map.items():
@@ -122,7 +122,7 @@ def handle_planner(
 
     query = "；".join(parts)
     if not query:
-        return "<em>请至少填写一项需求。</em>", "", "⏳ 等待提交", ""
+        return "<em>请至少填写一项需求。</em>", "⏳ 等待提交", ""
 
     try:
         result = planner_agent.run(
@@ -131,29 +131,33 @@ def handle_planner(
             attachment=attachment,
         )
     except ConfigError as exc:
-        return format_list([f"⚠️ 配置缺失：{exc}"], ""), "", "⚠️ 需要配置", ""
+        return format_list([f"⚠️ 配置缺失：{exc}"], ""), "⚠️ 需要配置", ""
     except ServiceError as exc:
-        return format_list([f"⚠️ 服务异常：{exc}"], ""), "", "⚠️ 需要人工复核", ""
+        return format_list([f"⚠️ 服务异常：{exc}"], ""), "⚠️ 需要人工复核", ""
 
-    # 组装规划 HTML
-    plan_html = format_list(result.plan, "暂无规划结果。")
+    # ── 规划 + 日程（合并为一个 HTML 块） ──
+    plan_parts: list[str] = []
 
-    # 日程信息
-    schedule_html = ""
+    # 日程信息（如有）
     if result.schedule_events:
-        lines = "\n".join(
-            f"<div class='plan-step'>📅 {e.get('date','?')} {e.get('time','?')} · {e.get('title','?')}</div>"
+        plan_parts.append("<div style='margin-bottom:0.8rem;padding:0.5rem 0.8rem;background:#fefce8;border:1px solid #fde68a;border-radius:6px;font-size:0.85rem;'>")
+        plan_parts.append("<strong>📅 从海报解析的日程：</strong>")
+        plan_parts.append("<br>".join(
+            f"<span style='margin-left:0.5rem;'>· {e.get('date','?')} {e.get('time','?')} — {e.get('title','?')}</span>"
             for e in result.schedule_events
-        )
-        schedule_html = f"<div style='margin-top:0.5rem;'><strong>📋 解析日程：</strong>{lines}</div>"
-    if result.schedule_conflicts:
-        conflicts = "\n".join(f"<div class='plan-step' style='border-left-color:#d97706;background:#fffbeb;'>⚠️ {c}</div>" for c in result.schedule_conflicts)
-        schedule_html += f"<div style='margin-top:0.5rem;'><strong>⚠️ 日程冲突：</strong>{conflicts}</div>"
+        ))
+        if result.schedule_conflicts:
+            plan_parts.append("<br><span style='color:#d97706;'>⚠️ " + " / ".join(result.schedule_conflicts) + "</span>")
+        plan_parts.append("</div>")
 
-    # 审核详情 HTML
+    # 规划步骤
+    plan_steps_html = format_list(result.plan, "暂无规划结果。")
+    plan_parts.append(plan_steps_html)
+
+    # ── 审核详情 ──
     review_html = _build_review_html(result.review_detail)
 
-    return plan_html, schedule_html, f"{result.verification}", review_html
+    return "\n".join(plan_parts), f"{result.verification}", review_html
 
 
 def _build_review_html(detail: dict) -> str:
@@ -190,7 +194,7 @@ def _build_review_html(detail: dict) -> str:
             names = [u["name"] for u in unverified]
             parts.append(f"<p style='margin:2px 0 0 1rem;font-size:0.78rem;color:#6b7280;'>这些地名在 地图 中无匹配，可能是 LLM 编造或拼写错误。</p>")
     else:
-        parts.append("<p style='color:#6b7280;'>📍 地点验证：未启用（需 GOOGLE_MAPS_API_KEY）</p>")
+        parts.append("<p style='color:#6b7280;'>📍 地点验证：未启用（需 AMAP_API_KEY）</p>")
 
     parts.append("</div></details>")
     return "\n".join(parts)
@@ -373,24 +377,17 @@ with gr.Blocks(title="SZ-HK Hub · 深港跨境生活助手", css=CSS, theme=gr.
         verify_status = gr.Textbox(label="📋 审核结果", value="—", interactive=False, scale=1)
 
     # ═══════════════════════════════════════════
-    # 输出区
+    # 输出区（全宽规划 + 底部审核）
     # ═══════════════════════════════════════════
     gr.Markdown("---")
-    with gr.Row():
-        with gr.Column(scale=3):
-            gr.Markdown("### 📋 规划方案")
-            planner_output = gr.HTML("<em style='color:#6b7280;'>填写需求后点击「一键生成规划」。</em>")
-        with gr.Column(scale=2):
-            gr.Markdown("### 📅 日程 & 冲突")
-            schedule_output = gr.HTML("<em style='color:#6b7280;'>如有上传海报，自动解析日程并检测冲突。</em>")
-
-    # 审核详情（可展开）
+    gr.Markdown("### 📋 规划方案")
+    planner_output = gr.HTML("<em style='color:#6b7280;'>填写需求后点击「一键生成规划」。</em>")
     review_detail_output = gr.HTML("")
 
     planner_button.click(
         fn=handle_planner,
         inputs=[purpose, destination, date_time, budget, extra, attachment],
-        outputs=[planner_output, schedule_output, verify_status, review_detail_output],
+        outputs=[planner_output, verify_status, review_detail_output],
     )
 
     # ═══════════════════════════════════════════
