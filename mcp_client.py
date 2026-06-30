@@ -431,12 +431,21 @@ class MCPClient:
 
     @staticmethod
     def _build_geo_result(query: str, geo: dict, addr: str) -> GeocodedPlace:
-        loc = geo.get("location", ",0,0").split(",")
+        loc_str = geo.get("location", "")
+        lat = None
+        lng = None
+        if loc_str and "," in loc_str:
+            parts = loc_str.split(",")
+            try:
+                lng = float(parts[0])
+                lat = float(parts[1]) if len(parts) >= 2 else None
+            except (ValueError, IndexError):
+                pass
         return GeocodedPlace(
             query=query, found=True,
             formatted_address=addr,
-            lat=float(loc[1]) if len(loc) >= 2 else None,
-            lng=float(loc[0]) if len(loc) >= 2 else None,
+            lat=lat,
+            lng=lng,
             place_type=geo.get("level", "未知"),
         )
 

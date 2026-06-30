@@ -17,7 +17,7 @@ import requests
 from fastapi import FastAPI, HTTPException, Request
 import uvicorn
 
-app = FastAPI(title="SZ-HK Hub MCP Server", version="0.2.0")
+app = FastAPI(title="SZ-HK Hub MCP Server", version="1.0.0")
 
 # ── 用户数据目录 ──────────────────────────────────────────
 USER_DATA_DIR = Path(os.getenv("USER_DATA_PATH", "./user_data")).resolve()

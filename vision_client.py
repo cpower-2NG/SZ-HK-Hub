@@ -191,7 +191,7 @@ class VisionClient:
             return "image/gif"
         if file_data.startswith(b"RIFF") and file_data[8:12] == b"WEBP":
             return "image/webp"
-        return "image/png"
+        raise ServiceError("不支持的文件类型，仅支持 PNG/JPEG/GIF/WebP 图片")
 
     def _extract_events(self, content: str) -> list[dict[str, str]]:
         parsed = self._safe_json(content)
@@ -222,8 +222,21 @@ class VisionClient:
         if start == -1:
             raise ServiceError("视觉模型未返回可解析的 JSON")
         depth = 0
+        in_string = False
+        escape = False
         for index in range(start, len(content)):
             char = content[index]
+            if escape:
+                escape = False
+                continue
+            if char == "\\":
+                escape = True
+                continue
+            if char == '"':
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
             if char == "{":
                 depth += 1
             elif char == "}":

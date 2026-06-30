@@ -324,7 +324,7 @@ def update_safety(text: str) -> str:
 # ── 初始数据 ──
 m = initial_metrics()
 
-with gr.Blocks(title="SZ-HK Hub · 深港跨境生活助手", css=CSS, theme=gr.themes.Soft()) as demo:
+with gr.Blocks(title="SZ-HK Hub · 深港跨境生活助手") as demo:
     # ── Header ──
     gr.HTML(f"""
     <div class="header-bar">
@@ -429,4 +429,4 @@ with gr.Blocks(title="SZ-HK Hub · 深港跨境生活助手", css=CSS, theme=gr.
 
 
 if __name__ == "__main__":
-    demo.launch()
+    demo.launch(css=CSS, theme=gr.themes.Soft())

@@ -45,7 +45,7 @@ class LLMClient:
         if self.provider == "openai":
             return self._chat_openai(system_prompt, user_prompt, json_mode=json_mode)
         if self.provider == "anthropic":
-            return self._chat_anthropic(system_prompt, user_prompt)
+            return self._chat_anthropic(system_prompt, user_prompt, json_mode=json_mode)
         return self._chat_ollama(system_prompt, user_prompt, json_mode=json_mode)
 
     def chat_json(self, system_prompt: str, user_prompt: str) -> dict[str, Any]:
@@ -82,17 +82,20 @@ class LLMClient:
         data = response.json()
         return data["choices"][0]["message"]["content"]
 
-    def _chat_anthropic(self, system_prompt: str, user_prompt: str) -> str:
+    def _chat_anthropic(self, system_prompt: str, user_prompt: str, *, json_mode: bool = False) -> str:
         url = f"{self.config.anthropic_base_url.rstrip('/')}/v1/messages"
         headers = {
             "x-api-key": self.config.anthropic_api_key or "",
             "anthropic-version": "2023-06-01",
         }
+        effective_system = system_prompt
+        if json_mode and "JSON" not in effective_system and "json" not in effective_system:
+            effective_system = f"{system_prompt}\n请始终以 JSON 格式输出。"
         payload = {
             "model": self.config.anthropic_model,
             "max_tokens": 4096,
             "temperature": 0.2,
-            "system": system_prompt,
+            "system": effective_system,
             "messages": [{"role": "user", "content": user_prompt}],
         }
         try:
@@ -153,8 +156,21 @@ class LLMClient:
         if start == -1:
             raise ServiceError("LLM 未返回可解析的 JSON")
         depth = 0
+        in_string = False
+        escape = False
         for index in range(start, len(content)):
             char = content[index]
+            if escape:
+                escape = False
+                continue
+            if char == "\\":
+                escape = True
+                continue
+            if char == '"':
+                in_string = not in_string
+                continue
+            if in_string:
+                continue
             if char == "{":
                 depth += 1
             elif char == "}":

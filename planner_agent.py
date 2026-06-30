@@ -218,8 +218,8 @@ class PlannerAgent:
                             "metadata": result.metadata,
                             "distance": result.distance,
                         })
-            # 按 distance 排序，取前 5 篇
-            rag_results.sort(key=lambda r: r.get("distance") or 999)
+            # 按 distance 排序（None 排最后），取前 5 篇
+            rag_results.sort(key=lambda r: r.get("distance") if r.get("distance") is not None else 999)
             rag_results = rag_results[:5]
 
         # ── MCP 工具调用 ──
