@@ -89,6 +89,7 @@ def test_ingest_corpus_reads_md_txt_and_respects_reset(tmp_path, monkeypatch) ->
         mcp_route_tool="route_planner",
         mcp_file_tool="file_ops",
         google_maps_api_key=None,
+            amap_api_key=None,
         user_data_path="./user_data",
         rag_corpus_path=str(corpus_dir),
         rag_db_path=str(db_dir),

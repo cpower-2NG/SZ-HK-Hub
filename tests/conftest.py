@@ -29,6 +29,7 @@ def make_config():
             mcp_exchange_tool="exchange_rate",
             mcp_route_tool="route_planner",
             mcp_file_tool="file_ops",
+            amap_api_key=None,
             google_maps_api_key=None,
             user_data_path="./user_data",
             rag_corpus_path="./rag_corpus",

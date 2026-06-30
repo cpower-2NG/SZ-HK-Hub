@@ -37,6 +37,7 @@ class AppConfig:
     mcp_route_tool: str
     mcp_file_tool: str
     google_maps_api_key: str | None
+    amap_api_key: str | None
     user_data_path: str
     rag_corpus_path: str
     rag_db_path: str
@@ -77,6 +78,7 @@ class AppConfig:
             mcp_route_tool=os.getenv("MCP_ROUTE_TOOL", "route_planner"),
             mcp_file_tool=os.getenv("MCP_FILE_TOOL", "file_ops"),
             google_maps_api_key=os.getenv("GOOGLE_MAPS_API_KEY"),
+            amap_api_key=os.getenv("AMAP_API_KEY"),
             user_data_path=str(Path(os.getenv("USER_DATA_PATH", "./user_data")).resolve()),
             rag_corpus_path=str(Path(os.getenv("RAG_CORPUS_PATH", "./rag_corpus")).resolve()),
             rag_db_path=str(Path(os.getenv("RAG_DB_PATH", "./rag_db")).resolve()),

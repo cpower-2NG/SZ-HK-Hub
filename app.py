@@ -109,8 +109,8 @@ def detect_conflicts(events: list[dict[str, str]]) -> list[str]:
 
 def handle_planner(
     purpose: str, destination: str, date_time: str, budget: str, extra: str, attachment: bytes | None
-) -> tuple[str, str, str]:
-    """统一 Pipeline：表单 + 附件 → Planner → 规划 + 日程 + 校验。"""
+) -> tuple[str, str, str, str]:
+    """统一 Pipeline：表单 + 附件 → Planner → 规划 + 日程 + 校验 + 审核详情。"""
     # 组装结构化 query
     parts = []
     label_map = {"出行目的": purpose, "目的地": destination, "日期时间": date_time, "预算": budget}
@@ -122,7 +122,7 @@ def handle_planner(
 
     query = "；".join(parts)
     if not query:
-        return "<em>请至少填写一项需求。</em>", "", "⏳ 等待提交"
+        return "<em>请至少填写一项需求。</em>", "", "⏳ 等待提交", ""
 
     try:
         result = planner_agent.run(
@@ -131,9 +131,9 @@ def handle_planner(
             attachment=attachment,
         )
     except ConfigError as exc:
-        return format_list([f"⚠️ 配置缺失：{exc}"], ""), "", "⚠️ 需要配置"
+        return format_list([f"⚠️ 配置缺失：{exc}"], ""), "", "⚠️ 需要配置", ""
     except ServiceError as exc:
-        return format_list([f"⚠️ 服务异常：{exc}"], ""), "", "⚠️ 需要人工复核"
+        return format_list([f"⚠️ 服务异常：{exc}"], ""), "", "⚠️ 需要人工复核", ""
 
     # 组装规划 HTML
     plan_html = format_list(result.plan, "暂无规划结果。")
@@ -150,7 +150,50 @@ def handle_planner(
         conflicts = "\n".join(f"<div class='plan-step' style='border-left-color:#d97706;background:#fffbeb;'>⚠️ {c}</div>" for c in result.schedule_conflicts)
         schedule_html += f"<div style='margin-top:0.5rem;'><strong>⚠️ 日程冲突：</strong>{conflicts}</div>"
 
-    return plan_html, schedule_html, f"{result.verification}"
+    # 审核详情 HTML
+    review_html = _build_review_html(result.review_detail)
+
+    return plan_html, schedule_html, f"{result.verification}", review_html
+
+
+def _build_review_html(detail: dict) -> str:
+    """构建可折叠的审核详情 HTML。"""
+    if not detail:
+        return ""
+
+    parts: list[str] = ["<details open style='margin-top:0.8rem;'>",
+                         "<summary style='cursor:pointer;font-weight:600;color:#374151;'>🔍 审核详情</summary>",
+                         "<div style='margin-top:0.4rem;font-size:0.85rem;'>"]
+
+    # LLM 审核结论
+    status = detail.get("llm_status", "?")
+    reason = detail.get("llm_reason", "")
+    status_color = {"pass": "#065f46", "review": "#92400e", "block": "#991b1b"}.get(status, "#6b7280")
+    parts.append(f"<p>📝 LLM 评审：<span style='color:{status_color};font-weight:600;'>{status}</span> — {reason}</p>")
+
+    # 合规红线
+    red = detail.get("red_line_check", "?")
+    parts.append(f"<p>🛡️ 合规红线：{'✅ 通过' if red == 'pass' else '⛔ 命中'}</p>")
+
+    # 地点验证
+    verified = detail.get("geo_verified", [])
+    unverified = detail.get("geo_unverified", [])
+    if verified or unverified:
+        parts.append("<p style='margin-bottom:2px;'>📍 地点验证（地图）：</p>")
+        if verified:
+            v_names = ", ".join('<span title="{}" style="color:#065f46;">{}</span>'.format(
+                v.get("address",""), v["name"]) for v in verified[:8])
+            parts.append(f"<p style='margin:0 0 2px 1rem;'>✅ {len(verified)} 个已验证：{v_names}</p>")
+        if unverified:
+            u_names = ", ".join(f"<span style='color:#dc2626;font-weight:600;'>{u['name']}</span>" for u in unverified[:8])
+            parts.append(f"<p style='margin:0 0 0 1rem;'>❌ {len(unverified)} 个未找到：{u_names}</p>")
+            names = [u["name"] for u in unverified]
+            parts.append(f"<p style='margin:2px 0 0 1rem;font-size:0.78rem;color:#6b7280;'>这些地名在 地图 中无匹配，可能是 LLM 编造或拼写错误。</p>")
+    else:
+        parts.append("<p style='color:#6b7280;'>📍 地点验证：未启用（需 GOOGLE_MAPS_API_KEY）</p>")
+
+    parts.append("</div></details>")
+    return "\n".join(parts)
 
 
 def handle_events(text: str, file_data: bytes | None) -> tuple[str, str]:
@@ -327,7 +370,7 @@ with gr.Blocks(title="SZ-HK Hub · 深港跨境生活助手", css=CSS, theme=gr.
 
     with gr.Row():
         planner_button = gr.Button("🚀 一键生成规划", variant="primary", size="lg", scale=2)
-        verify_status = gr.Textbox(label="🛡️ 合规状态", value="—", interactive=False, scale=1)
+        verify_status = gr.Textbox(label="📋 审核结果", value="—", interactive=False, scale=1)
 
     # ═══════════════════════════════════════════
     # 输出区
@@ -341,16 +384,19 @@ with gr.Blocks(title="SZ-HK Hub · 深港跨境生活助手", css=CSS, theme=gr.
             gr.Markdown("### 📅 日程 & 冲突")
             schedule_output = gr.HTML("<em style='color:#6b7280;'>如有上传海报，自动解析日程并检测冲突。</em>")
 
+    # 审核详情（可展开）
+    review_detail_output = gr.HTML("")
+
     planner_button.click(
         fn=handle_planner,
         inputs=[purpose, destination, date_time, budget, extra, attachment],
-        outputs=[planner_output, schedule_output, verify_status],
+        outputs=[planner_output, schedule_output, verify_status, review_detail_output],
     )
 
     # ═══════════════════════════════════════════
-    # 底部：RAG 快速检索 + 合规检测
+    # 底部：RAG 快速检索 + 审核
     # ═══════════════════════════════════════════
-    with gr.Accordion("🔍 高级工具：知识检索 & 合规检测", open=False):
+    with gr.Accordion("🔍 高级工具：知识检索 & 审核", open=False):
         with gr.Row():
             with gr.Column(scale=3):
                 rag_query = gr.Textbox(
@@ -362,7 +408,7 @@ with gr.Blocks(title="SZ-HK Hub · 深港跨境生活助手", css=CSS, theme=gr.
                 rag_button.click(fn=search_rag, inputs=rag_query, outputs=rag_results)
             with gr.Column(scale=1):
                 safety_input = gr.Textbox(
-                    label="合规检测",
+                    label="审核",
                     placeholder="输入需检测的内容…",
                 )
                 safety_output = gr.Textbox(value="🔍 自动标记敏感问题。", interactive=False)

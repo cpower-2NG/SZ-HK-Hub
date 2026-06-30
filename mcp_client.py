@@ -59,6 +59,17 @@ class FileOpResult:
     files: list[dict] | None = None
 
 
+@dataclass(frozen=True)
+class GeocodedPlace:
+    """Google Geocoding 验证结果。"""
+    query: str          # 原始查询
+    found: bool          # 是否找到匹配
+    formatted_address: str | None = None  # 标准化地址
+    lat: float | None = None
+    lng: float | None = None
+    place_type: str | None = None  # restaurant, transit_station, university, etc.
+
+
 class MCPClient:
     def __init__(self, config: AppConfig) -> None:
         self.config = config
@@ -256,12 +267,12 @@ class MCPClient:
 
     def get_route(self, origin: str, destination: str) -> RoutePlan:
         """跨境路线规划：优先 Google Maps，其次 MCP 服务，最后预设路线。"""
-        # 1) 尝试 Google Maps
-        if self.config.google_maps_api_key:
+        # 1) 尝试高德地图
+        if self.config.amap_api_key:
             try:
-                routes = self._call_google_maps(origin, destination)
+                routes = self._call_amap_directions(origin, destination)
                 if routes:
-                    return RoutePlan(origin=origin, destination=destination, routes=routes, source="google_maps")
+                    return RoutePlan(origin=origin, destination=destination, routes=routes, source="amap")
             except Exception:
                 pass
 
@@ -292,47 +303,56 @@ class MCPClient:
         # 3) 回退：预设路线
         return self._preset_route(origin, destination)
 
-    def _call_google_maps(self, origin: str, destination: str) -> list[RouteOption]:
-        """调用 Google Maps Directions API。"""
-        url = "https://maps.googleapis.com/maps/api/directions/json"
+    def _call_amap_directions(self, origin: str, destination: str) -> list[RouteOption]:
+        """调用高德地图公交路径规划 API。"""
+        # 先 geocode 获取起终点坐标
+        origin_geo = self.geocode_place(origin)
+        dest_geo = self.geocode_place(destination)
+
+        if not origin_geo.found or not dest_geo.found:
+            return []
+
+        url = "https://restapi.amap.com/v3/direction/transit/integrated"
         params = {
-            "origin": origin,
-            "destination": destination,
-            "key": self.config.google_maps_api_key,
-            "mode": "transit",
-            "alternatives": "true",
-            "language": "zh-CN",
+            "key": self.config.amap_api_key,
+            "origin": f"{origin_geo.lng},{origin_geo.lat}",
+            "destination": f"{dest_geo.lng},{dest_geo.lat}",
+            "city": "香港",
+            "cityd": "香港",
+            "extensions": "all",
         }
         resp = requests.get(url, params=params, timeout=15)
         resp.raise_for_status()
         data = resp.json()
-        if data.get("status") != "OK":
+        if data.get("status") != "1" or not data.get("route"):
             return []
 
         routes: list[RouteOption] = []
-        for route in data.get("routes", [])[:2]:
-            legs = route.get("legs", [{}])
-            leg = legs[0] if legs else {}
-            duration_min = round(leg.get("duration", {}).get("value", 0) / 60)
-            distance_km = leg.get("distance", {}).get("value", 0) / 1000
+        transit = data["route"].get("transits", [])
+        for t in transit[:2]:
+            duration_min = round(int(t.get("duration", "0")) / 60)
+            cost = float(t.get("cost", "0"))
+            distance_m = int(t.get("distance", "0"))
 
-            steps = leg.get("steps", [])
+            # 提取交通方式
+            segments = t.get("segments", [])
             modes: list[str] = []
-            for step in steps[:4]:
-                mode = step.get("travel_mode", "")
-                if mode == "TRANSIT":
-                    detail = step.get("transit_details", {})
-                    line = detail.get("line", {}).get("short_name", "")
-                    modes.append(line if line else "公交")
-                elif mode:
-                    modes.append({"WALKING": "步行", "DRIVING": "驾车"}.get(mode, mode))
+            for seg in segments[:5]:
+                bus_info = seg.get("bus", {})
+                bus_name = bus_info.get("buslines", [{}])[0].get("name", "") if bus_info.get("buslines") else ""
+                if bus_name:
+                    modes.append(bus_name)
+                elif seg.get("walking"):
+                    modes.append(f"步行{seg['walking'].get('distance','0')}m")
 
             mode_str = " → ".join(modes) if modes else "公交/地铁"
+            cost_hkd = cost if cost > 0 else round(distance_m / 1000 * 2, 0)
+
             routes.append(RouteOption(
                 mode=mode_str,
                 duration_min=duration_min,
-                cost_hkd=round(distance_km * 1.5, 0),
-                note=f"Google Maps 实时路线，约 {distance_km:.1f} km",
+                cost_hkd=cost_hkd,
+                note=f"高德地图实时路线，约 {distance_m/1000:.1f} km",
             ))
 
         return routes
@@ -364,6 +384,88 @@ class MCPClient:
             routes=[RouteOption("港铁（推荐）", 55, 40, "请指定具体口岸以获取精确路线")],
             source="preset",
         )
+
+    def geocode_place(self, query: str) -> GeocodedPlace:
+        """通过高德地图地理编码 API 验证地点名称。"""
+        if not self.config.amap_api_key:
+            return GeocodedPlace(query=query, found=False)
+
+        def _try_geocode(q: str, city: str | None = "香港") -> dict | None:
+            params: dict = {"key": self.config.amap_api_key, "address": q}
+            if city:
+                params["city"] = city
+            resp = requests.get("https://restapi.amap.com/v3/geocode/geo", params=params, timeout=10)
+            resp.raise_for_status()
+            data = resp.json()
+            if data.get("status") != "1" or not data.get("geocodes"):
+                return None
+            return data
+
+        def _is_hk_or_border(addr: str, prov: str) -> bool:
+            # 严格匹配：地址或省份必须含"香港"或"深圳"
+            return ("香港" in addr or "深圳" in addr or
+                    "香港" in prov or "广东省深圳市" in addr)
+
+        try:
+            # 先尝试 city=香港
+            data = _try_geocode(query, "香港")
+            if data:
+                for geo in data["geocodes"]:
+                    addr = geo.get("formatted_address", "")
+                    prov = geo.get("province", "")
+                    if _is_hk_or_border(addr, prov):
+                        return self._build_geo_result(query, geo, addr)
+
+            # 再尝试不加 city 限制
+            data = _try_geocode(query, None)
+            if data:
+                for geo in data["geocodes"]:
+                    addr = geo.get("formatted_address", "")
+                    prov = geo.get("province", "")
+                    if _is_hk_or_border(addr, prov):
+                        return self._build_geo_result(query, geo, addr)
+
+            return GeocodedPlace(query=query, found=False)
+        except Exception:
+            return GeocodedPlace(query=query, found=False)
+
+    @staticmethod
+    def _build_geo_result(query: str, geo: dict, addr: str) -> GeocodedPlace:
+        loc = geo.get("location", ",0,0").split(",")
+        return GeocodedPlace(
+            query=query, found=True,
+            formatted_address=addr,
+            lat=float(loc[1]) if len(loc) >= 2 else None,
+            lng=float(loc[0]) if len(loc) >= 2 else None,
+            place_type=geo.get("level", "未知"),
+        )
+
+    def batch_geocode_places(self, plan_steps: list[str]) -> dict[str, GeocodedPlace]:
+        """从规划步骤中提取知名地名并批量验证（白名单匹配，避免正则贪心）。"""
+        import re
+        if not self.config.amap_api_key:
+            return {}
+
+        known = re.compile(
+            r"(香港科技大学|香港中文大学|香港大学|太平山顶|维多利亚港|维多利亚公园"
+            r"|星光大道|庙街夜市|庙街|兰桂坊|海洋公园|迪士尼乐园|迪士尼"
+            r"|天星小轮|天星码头|西九龙文化区|西九龙站|西九龙"
+            r"|铜锣湾|尖沙咀|旺角|中环|湾仔|上环|金钟|红磡|九龙塘|彩虹站|彩虹"
+            r"|将军澳|西贡|元朗|屯门|沙田|大埔|上水|粉岭|落马洲|罗湖|福田|皇岗|深圳湾"
+            r"|清水湾|南丫岛|昂坪|大澳|东涌|欣澳|青衣|荃湾|葵涌|深水埗|观塘|黄大仙"
+            r"|罗湖口岸|福田口岸|深圳湾口岸|皇岗口岸|港珠澳大桥口岸|文锦渡口岸|沙头角口岸"
+            r"|西九龙高铁站|九龙站|香港站|九龙塘站|红磡站|落马洲站|罗湖站|上水站|粉岭站"
+            r"|太和站|大埔墟站|大学站|火炭站|沙田站|大围站|旺角东站|金钟站)"
+        )
+        places: dict[str, GeocodedPlace] = {}
+        seen: set[str] = set()
+        for step in plan_steps:
+            for match in known.finditer(step):
+                name = match.group(1)
+                if name not in seen:
+                    seen.add(name)
+                    places[name] = self.geocode_place(name)
+        return places
 
     def file_save(self, filename: str, data: dict) -> FileOpResult:
         """保存用户数据到服务端 user_data/ 目录。"""

@@ -31,6 +31,7 @@ class AgentState(TypedDict, total=False):
     verification_status: str
     reflection_count: int
     correction_notes: str
+    review_detail: dict[str, Any]
 
 
 @dataclass
@@ -40,6 +41,7 @@ class PlannerResult:
     schedule_events: list[dict[str, str]] = field(default_factory=list)
     schedule_conflicts: list[str] = field(default_factory=list)
     data_summary: str = ""
+    review_detail: dict[str, Any] = field(default_factory=dict)
 
 
 class PlannerAgent:
@@ -62,18 +64,18 @@ class PlannerAgent:
         graph.add_node("decompose", self._decompose_tasks)
         graph.add_node("execute", self._execute_actions)
         graph.add_node("plan", self._generate_plan)
-        graph.add_node("verify", self._verify)
+        graph.add_node("review", self._review)
 
         graph.set_entry_point("route")
-        # route → decompose (拆解复杂任务) → execute → plan → verify
+        # route → decompose → execute → plan → review
         graph.add_edge("route", "decompose")
         graph.add_edge("decompose", "execute")
         graph.add_edge("execute", "plan")
-        graph.add_edge("plan", "verify")
+        graph.add_edge("plan", "review")
 
-        # Reflection 循环：verify → plan (修正) 或 END (完成)
+        # Reflection 循环：review → plan (修正) 或 END (完成)
         graph.add_conditional_edges(
-            "verify",
+            "review",
             self._should_reflect,
             {"plan": "plan", END: END},
         )
@@ -99,6 +101,7 @@ class PlannerAgent:
             schedule_events=result.get("schedule_events", []),
             schedule_conflicts=result.get("schedule_conflicts", []),
             data_summary=result.get("correction_notes", ""),
+            review_detail=result.get("review_detail", {}),
         )
 
     def _route_intent(self, state: AgentState) -> AgentState:
@@ -360,6 +363,10 @@ class PlannerAgent:
             "7. 如果含购物/消费，必须结合当前汇率给出人民币参考价\n"
             "8. 必须标注返程时口岸关闭时间和港铁末班车\n"
             "9. 输出 5-8 条步骤\n\n"
+            "⚠️ 重要：\n"
+            "- 如果知识库和工具数据中没有某地点/路线的确切信息，必须在对应步骤开头标注 ⚠️[待确认]\n"
+            "- 不要编造不存在的地名、公交线路、餐厅名称\n"
+            "- 口岸、港铁站名必须来自实时工具数据或知识库，禁止臆造\n\n"
             "输出 JSON：{\"tasks\":[\"步骤1...\",\"步骤2...\",\"步骤3...\"]}\n\n"
             "示例1（出行+比赛+旅游）：\n"
             "\"【出发准备】确认港澳通行证及签注，下载MTR Mobile，兑换HK$500（1HKD=0.87CNY≈¥435），开通手机漫游\"\n"
@@ -411,66 +418,112 @@ class PlannerAgent:
             raise ServiceError("规划生成失败")
         return {"plan_steps": plan}
 
-    def _verify(self, state: AgentState) -> AgentState:
-        """合规审核 + Reflection 自审查。"""
+    def _review(self, state: AgentState) -> AgentState:
+        """两层审核：①硬合规红线 ②质量评审（含地点验证）。"""
         query = state.get("user_query", "")
         plan = state.get("plan_steps", [])
         reflection_count = state.get("reflection_count", 0)
 
-        # 规则层：敏感词过滤
+        # ── 第①层：合规红线（规则，不消耗 LLM） ──
         if any(term in query for term in SENSITIVE_TERMS):
-            return {"verification_status": "需要人工复核"}
+            return {"verification_status": "⛔ 需人工审核：命中敏感词"}
 
         if not self.llm_client.is_configured:
-            return {"verification_status": "已通过"}
+            return {"verification_status": "✅ 通过"}
 
-        # Reflection 自审查：让 LLM 审视生成的规划
+        # ── 地点验证（Google Geocoding） ──
+        geo_results: dict[str, Any] = {}
+        geo_verified: list[dict] = []
+        geo_unverified: list[dict] = []
+        try:
+            geo_results = self.mcp_client.batch_geocode_places(plan)
+            for name, g in geo_results.items():
+                if g.found:
+                    geo_verified.append({"name": name, "address": g.formatted_address, "type": g.place_type})
+                else:
+                    geo_unverified.append({"name": name, "query": g.query})
+        except Exception:
+            pass
+
+        geo_note = ""
+        if geo_unverified:
+            names = [g["name"] for g in geo_unverified[:10]]
+            geo_note = f"以下 {len(geo_unverified)} 个地名未在 Google Maps 中找到（可能是编造或拼写错误）：{', '.join(names)}"
+
+        # ── 第②层：LLM 质量评审 ──
         plan_text = "\n".join(f"{i+1}. {step}" for i, step in enumerate(plan))
         system_prompt = (
-            "你是深港跨境规划的质量审核专家。请严格审查以下规划方案。只回答 JSON。\n\n"
-            "审查规则：\n"
-            "- 如果规划完全满足用户需求且无问题，status 为 pass\n"
-            "- 如果发现任何问题（合规风险、步骤缺失、信息不具体），status 为 review\n"
-            "- status 为 review 时，corrections 必须包含具体修改指令，不能为空"
+            "你是深港跨境规划审核员。严格审查规划，只输出 JSON。\n"
+            "① 硬合规红线：涉及洗钱/违规开户/绕过外汇 → status=block\n"
+            "② 质量评审（status=pass/review）：\n"
+            "   - 地点是否编造？（如有「未找到」的地名，必须要求修正）\n"
+            "   - 步骤是否有具体时间/路线/费用？\n"
+            "   - 是否遗漏返程安排？\n"
+            "status=review 时 corrections 必填一句话修改指令。"
         )
         user_prompt = (
             f"## 用户需求\n{query}\n\n"
-            f"## 生成的规划\n{plan_text}\n\n"
-            "逐项检查：\n"
-            "1. 是否提及任何违规操作（绕过外汇、洗钱、违规开户等）？\n"
-            "2. 每个步骤是否有具体的时间/地点/路线/费用？\n"
-            "3. 是否覆盖出发前准备（证件/换汇/网络）？\n"
-            "4. 是否覆盖返程安排（口岸关闭时间/末班车）？\n"
-            "5. 日程（如有）是否全部纳入规划？\n"
-            "6. 多个可选方案时是否指明了推荐方案？\n\n"
-            "输出 JSON：{\"status\":\"pass\"|\"review\",\"reason\":\"如pass可为空，review必填\",\"corrections\":\"具体修改指令，review时必填\"}"
+            f"## 规划\n{plan_text}\n\n"
+            f"## 地点验证\n{geo_note or '✅ 所有地点均已通过 Google Maps 验证'}\n\n"
+            "输出 JSON：{\"status\":\"pass\"|\"review\"|\"block\",\"reason\":\"\",\"corrections\":\"\"}"
         )
 
         try:
             verdict = self.llm_client.chat_json(system_prompt, user_prompt)
         except ServiceError:
-            return {"verification_status": "已通过"}
+            return {
+                "verification_status": "✅ 通过",
+                "review_detail": {
+                    "geo_verified": geo_verified,
+                    "geo_unverified": geo_unverified,
+                    "llm_status": "pass",
+                    "llm_reason": "",
+                },
+            }
 
         status = verdict.get("status", "pass")
         reason = verdict.get("reason", "")
         corrections = verdict.get("corrections", "")
 
-        # 修复：review 但无 corrections 时，用 reason 作为修正指令
+        # 构建审核详情
+        review_detail: dict[str, Any] = {
+            "geo_verified": geo_verified,
+            "geo_unverified": geo_unverified,
+            "llm_status": status,
+            "llm_reason": reason or ("无问题" if status == "pass" else ""),
+            "red_line_check": "pass",
+        }
+
+        if status == "block":
+            return {
+                "verification_status": f"⛔ 不合规：{reason or '建议被驳回'}",
+                "review_detail": review_detail,
+            }
+
         if status == "review" and not corrections and reason:
-            corrections = f"请修正以下问题：{reason}"
+            corrections = f"请修正：{reason}"
 
         if status == "review" and corrections and reflection_count < MAX_REFLECTION_ROUNDS:
+            note = f"🔄 第{reflection_count + 1}轮修正"
+            if geo_unverified:
+                note += f" | {len(geo_unverified)}个地名待确认"
             return {
-                "verification_status": f"修正中（第{reflection_count + 1}轮）：{reason}",
+                "verification_status": note,
                 "correction_notes": corrections,
                 "reflection_count": reflection_count + 1,
+                "review_detail": review_detail,
             }
 
         if status == "review":
-            # 已达最大轮次或无有效修正指令 → 标记人工复核
-            return {"verification_status": f"⚠️ 需要人工复核：{reason or '审核未通过'}"}
+            return {
+                "verification_status": f"⚠️ 需人工确认：{reason or '审核未通过'}",
+                "review_detail": review_detail,
+            }
 
-        return {"verification_status": "✅ 已通过"}
+        return {
+            "verification_status": "✅ 通过",
+            "review_detail": review_detail,
+        }
 
     def _should_reflect(self, state: AgentState) -> str:
         """决定是否需要 Reflection 修正循环。"""
